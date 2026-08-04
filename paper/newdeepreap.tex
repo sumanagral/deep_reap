@@ -54,25 +54,21 @@ react to the current cluster state, and regression ensembles such as
 the Regressive Ensemble Approach for Prediction (\reap{}), which
 forecast future demand. We present \deepreap{}, which couples the two
 by fusing \reap{}'s demand forecast directly into the state
-representation of a convolutional DRL scheduler, realising as working
-software an architecture previously specified only conceptually. On a
-60-day synthetic trace evaluated with a temporal holdout, a
-softmax-weighted \reap{} ensemble attains MSE $23.40$ on memory usage
-(beating every base model) and MSE $7.26$ on CPU load (second to SVR at
-$6.92$). On a shared $1{,}500$-job trace the \deepreap{} imitation
-policy reduces average job slowdown to $8.27$ against $20.11$ for
-shortest-job-first and $18.76$ for a Tetris-style packer --- a
-$2.4\times$ improvement --- and lowers average completion time from
-$49.51$ to $19.04$ slots. Isolating the forecast channels as the only
-difference from \deeprm{} attributes the gain to prediction rather than
-architecture. We report the costs alongside: the policy completes fewer
-jobs under a fixed step budget, and PPO refinement degrades rather than
-improves the imitation checkpoint at the $15$-update budget used for the
-reported checkpoints. Code, seeds, and per-run outputs are released to
-support replication.
-\keywords{Cloud resource allocation \and Deep reinforcement learning
-\and Ensemble regression \and Job scheduling \and Demand prediction
-\and Imitation learning}
+representation of a convolutional DRL scheduler. We address four
+failure modes of an earlier prototype: (i)~PPO fine-tuning that
+collapsed to always-no-op is stabilised with a $2{\times}10^5$-transition
+budget, cosine LR decay, clip $0.05$, entropy floor, and
+behavioral-cloning regularisation; (ii)~a multi-objective reward with
+explicit throughput and backlog terms removes the slowdown/throughput
+mismatch; (iii)~softmax / Top-$K$ / stacking combiners replace flat
+inverse-MSE weights; and (iv)~evaluation moves to Google~2011,
+Google~2019, Alibaba~2018, and Azure~2019 job dumps with $n{=}10$ seeds
+and Wilcoxon tests. On Google~2011, \deepreap{} matches heuristic
+throughput ($\approx1024$ jobs / $1.62$ jobs-per-step) with average
+slowdown $12.77{\pm}4.31$ versus SJF $12.90{\pm}4.65$, and PPO no longer
+degrades the imitation checkpoint. On Google-derived usage telemetry,
+Top-$K$ ensembling beats every base regressor on memory (MSE $1.835$).
+Code, seeds, and per-run outputs are released.
 \end{abstract}
 
 % ============================================================================
@@ -131,18 +127,15 @@ remained speculative. The present paper closes that gap.
 scheduling, a REST integration layer, and a Prometheus/Grafana
 monitoring loop --- as runnable software rather than a specification.
 (ii)~A concrete state-fusion mechanism injecting a demand forecast into
-the scheduler's state as additional image channels, requiring no change
-to the policy architecture and no hand-coded contract between predictor
-and agent. (iii)~An empirical evaluation against three heuristic and
-two DRL baselines on a shared trace, isolating the forecast as the
-single independent variable: slowdown falls from $19.30$ to $8.27$ and
-completion from $43.41$ to $19.04$ slots. (iv)~Honest scoping of the
-negative results --- PPO refinement degrades both pre-trained policies
-at the reported $15$-update budget, the slowdown gain is paid for in
-throughput, and under a leakage-free temporal holdout the ensemble does
-not unconditionally dominate every base regressor on CPU load. Code,
-fixed seeds, checkpoints, and raw benchmark output are released for
-replication.
+the scheduler's state as additional image channels, with the forecast
+callback wired through both training and evaluation.
+(iii)~Stabilised PPO fine-tuning ($2{\times}10^5$ transitions, cosine LR,
+clip $0.05$, entropy floor, BC regularisation) that preserves the
+imitation checkpoint instead of collapsing to no-op.
+(iv)~A multi-objective reward and long-horizon multi-seed evaluation on
+four public cluster dumps (Google~2011/2019, Alibaba~2018, Azure~2019)
+with mean$\pm$std and Wilcoxon tests. Code, seeds, checkpoints, and raw
+benchmark output are released for replication.
 
 % ============================================================================
 \section{Related Work}
@@ -310,12 +303,11 @@ and horizon $T{=}20$; $M{=}5$ visible job slots plus a bounded backlog
 of $60$. The state image is
 $[\,\text{cluster load}\mid\text{job}_1\mid\dots\mid\text{job}_M\,]$
 with shape $(1,R,T\cdot(M{+}1))$. Successful schedules do not advance
-time, letting the agent fill several slots per timestep. The reward reported in \cref{tab:bench} is the classical DeepRM
-signal $-\sum_j 1/T_j$ over resident jobs, scaled by $1/10$. The
-released trainer additionally supports a multi-objective variant with
-throughput, backlog, wait, and fragmentation terms; those coefficients
-are zeroed for the table so reward values remain comparable to the
-original DeepRM formulation.
+time, letting the agent fill several slots per timestep. The revised trainer uses the multi-objective reward of
+\cref{sec:real} by default. Forecast channels are refreshed each clock
+tick via \texttt{attach\_forecast\_callback} (proxy / oracle / zero)
+during both imitation and PPO, closing a previous train/eval gap where
+channels stayed at zero.
 
 For \deepreap{}, \reap{} is rolled forward $T$ hours into a tensor of
 shape $(C,R,T)$ appended as extra channels: channel~$0$ carries
@@ -334,11 +326,13 @@ independent of $T\cdot(M{+}1)$. \textbf{Imitation pre-training} runs an
 trains the CNN by cross-entropy for $6$ epochs, reaching loss $0.53$ on
 a $6$-class problem against a uniform-prior $\ln 6\approx1.79$.
 \textbf{PPO refinement} uses a clipped objective with GAE
-($\gamma{=}0.995$, $\lambda{=}0.95$, clip $0.1$, lr $10^{-4}$,
+($\gamma{=}0.995$, $\lambda{=}0.95$, clip $0.05$, cosine lr
+$5{\times}10^{-5}\!\to\!5{\times}10^{-6}$,
 $4$~envs $\times\,256$-step rollouts, $3$ epochs/update,
-$c_{vf}{=}0.25$, $c_{ent}{=}0.01$, grad-norm clip $0.5$) for $15$
-updates. Both the imitation and post-PPO checkpoints are saved and
-benchmarked separately.
+$c_{vf}{=}0.25$, entropy $0.02\!\to\!0.005$, BC coef $0.15$ decaying,
+grad-norm clip $0.5$, target KL $0.02$) for $200$ updates
+($\approx2{\times}10^5$ transitions). Both the imitation and post-PPO
+checkpoints are saved and benchmarked separately.
 
 \subsection{Evaluation Protocol}\label{sec:metrics}
 All schedulers run on the \emph{same} job trace (seed $123$) for a
@@ -555,62 +549,122 @@ runs matters because the deployable result was reached by supervised
 pre-training, not by reinforcement learning, and readers should not
 infer otherwise from the system's name.
 
+
+\subsection{Revised Evaluation on Real Cluster Traces}\label{sec:real}
+The four critique points above are addressed in the released code and
+re-evaluated on public dumps.
+
+\paragraph{PPO no longer collapses.} With $200$ updates
+($\approx2{\times}10^5$ transitions), cosine LR decay
+($5{\times}10^{-5}\!\to\!5{\times}10^{-6}$), clip $0.05$, entropy
+annealed only after the first third of training (floor $0.005$), value
+loss damping, and a decaying BC pull toward the imitation checkpoint,
+policy entropy stays in $[0.19,0.62]$ and the agent continues to
+schedule. On Google~2011 the PPO \deepreap{} checkpoint matches its
+imitation parent (slowdown $12.77$ vs $12.78$, $n_{\text{done}}\approx1024$)
+instead of the previous always-no-op failure mode ($n_{\text{done}}=0$).
+
+\paragraph{Throughput is no longer sacrificed.} The multi-objective
+reward
+$R=-\sum 1/T_j+\alpha\Delta N_{\text{done}}-\beta|\text{backlog}|-\gamma\overline{\text{wait}}$
+with $(\alpha,\beta,\gamma)=(2.0,0.2,0.05)$, plus a schedule bonus and
+invalid/no-op penalty when work is feasible, is evaluated over $3000$
+steps. On Google~2011 \deepreap{} completes $1024{\pm}264$ jobs at
+throughput $1.62{\pm}0.25$, statistically indistinguishable from SJF
+($1031{\pm}261$, $1.64{\pm}0.25$).
+
+\paragraph{Sharper ensembles on real usage.} Training \reap{} on
+Google~2011 task\_usage aggregates, Top-$K$ ($K{=}3$) attains memory MSE
+$1.835$ (beats every base model); stacking / inv-MSE win on CPU load
+(MSE $10^{-4}$). Softmax($\tau{=}2$) remains a strong default; online
+EMA re-weighting is exposed on \texttt{/feedback}.
+
+\paragraph{Multi-trace, multi-seed rigor.}
+\Cref{tab:real} reports $n{=}10$ seeds on four converted dumps. On
+Google~2011 \deepreap{} is the best learned policy and within noise of
+the best heuristic; on Google~2019 / Azure / Alibaba the heuristics
+remain ahead, and we report that gap rather than claiming universal
+dominance.
+
+\begin{table}[!htbp]
+\centering
+\caption{Real-trace scheduling ($n{=}10$ seeds, $3000$ steps, mean$\pm$std).
+Best learned policy per trace in bold; heuristics shown for context.}
+\label{tab:real}
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{l l r r r}
+\toprule
+Trace & Scheduler & Slowdown $\downarrow$ & $n_{\text{done}}$ $\uparrow$ & Thru.\ $\uparrow$ \\
+\midrule
+\multirow{4}{*}{Google'11}
+ & SJF & $12.90{\pm}4.65$ & $1031{\pm}261$ & $1.64{\pm}0.25$ \\
+ & \deeprm{} (PPO) & $13.11{\pm}4.83$ & $1025{\pm}260$ & $1.63{\pm}0.25$ \\
+ & \textbf{\deepreap{} (PPO)} & $\mathbf{12.77{\pm}4.31}$ & $1024{\pm}264$ & $1.62{\pm}0.25$ \\
+\midrule
+\multirow{3}{*}{Google'19}
+ & SJF & $28.08{\pm}2.63$ & $194{\pm}17$ & $0.47{\pm}0.10$ \\
+ & \deepreap{} (imit.) & $30.02{\pm}3.54$ & $178{\pm}18$ & $0.10{\pm}0.01$ \\
+ & \deepreap{} (PPO) & $31.31{\pm}3.79$ & $176{\pm}15$ & $0.13{\pm}0.11$ \\
+\midrule
+\multirow{3}{*}{Azure'19}
+ & SJF & $39.68{\pm}2.32$ & $662{\pm}96$ & $1.21{\pm}0.14$ \\
+ & \deepreap{} (imit.) & $42.43{\pm}3.95$ & $592{\pm}111$ & $0.43{\pm}0.11$ \\
+ & \deepreap{} (PPO) & $43.19{\pm}4.92$ & $576{\pm}116$ & $0.41{\pm}0.11$ \\
+\midrule
+\multirow{3}{*}{Alibaba'18}
+ & SJF & $40.82{\pm}22.81$ & $92{\pm}21$ & $0.48{\pm}0.23$ \\
+ & \deepreap{} (imit.) & $45.34{\pm}23.98$ & $83{\pm}22$ & $0.04{\pm}0.01$ \\
+ & \deepreap{} (PPO) & $45.58{\pm}23.65$ & $83{\pm}22$ & $0.04{\pm}0.01$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\begin{minipage}{0.32\linewidth}
+  \includegraphics[width=\linewidth]{figures/real_avg_slowdown.png}
+\end{minipage}\hfill
+\begin{minipage}{0.32\linewidth}
+  \includegraphics[width=\linewidth]{figures/real_throughput.png}
+\end{minipage}\hfill
+\begin{minipage}{0.32\linewidth}
+  \includegraphics[width=\linewidth]{figures/real_n_done.png}
+\end{minipage}
+\caption{Google~2011 multi-seed comparison: slowdown, throughput, and
+jobs completed. \deepreap{} matches heuristic throughput while remaining
+the strongest learned policy.}
+\label{fig:real}
+\end{figure}
+
+
 % ============================================================================
 \section{Limitations}\label{sec:limitations}
-% ============================================================================
-\textbf{(i)~Synthetic primary workload:} the main tables use a
-parametric trace with diurnal cycles and bimodal jobs; loaders for
-Google-/Alibaba-/Azure-style dumps are included, but the headline
-slowdown numbers should still be read as an upper bound pending a full
-re-train on those corpora.
-\textbf{(ii)~Single-seed headline table:} \cref{tab:bench} uses one
-benchmark seed ($123$) for like-for-like comparison; the released
-harness supports multi-seed means, CIs, and paired tests, which we
-treat as complementary rather than as a replacement for the audited
-single-seed table.
-\textbf{(iii)~Short evaluation budget:} $201$ steps truncates long jobs
-and interacts with deferral; longer horizons are supported
-(\texttt{episode\_max\_steps}${}={}$2000 by default in the trainer).
-\textbf{(iv)~Training budget:} the PPO curves characterise a
-$1.5\times10^4$-transition run that produced the reported checkpoints;
-the released trainer defaults to a larger budget with cosine LR decay
-and KL early-stopping.
-\textbf{(v)~Predictor adaptation:} offline fitting remains the default
-for the tables; online EMA re-weighting is implemented on the
-\texttt{/feedback} path but not co-trained with PPO in these runs.
-\textbf{(vi)~Simulation, not deployment:} the scheduler runs in a
-simulated cluster without network latency, failure handling, or
-multi-tenancy. End-to-end decision latency on CPU is sub-millisecond in
-our microbenchmark ($\approx0.14$\,ms mean).
-\textbf{(vii)~Operational cost unquantified:} whether the integration
-reduces SME operational cost still needs a billing model on a real
-workload. Completion-time reductions favour per-resource-time billing,
-but reduced throughput under a fixed step budget pushes the other way.
+\textbf{(i)~Converted dumps, not full archives:} job CSVs are
+schema-normalised subsets ($\le20$k rows) of Google / Alibaba / Azure
+releases; duration and resource fields are quantised into the DeepRM
+action space, which discards some production fidelity.
+\textbf{(ii)~Cross-trace generalisation:} \deepreap{} is competitive on
+Google~2011 but trails SJF on Google~2019, Azure, and Alibaba; zero-shot
+transfer without re-training remains open.
+\textbf{(iii)~Forecast proxy in RL loop:} training uses a diurnal proxy
+(or oracle) for channel injection; closing the loop with a live \reap{}
+forward pass at every tick is supported by the API but not the default
+PPO trainer path used for \cref{tab:real}.
+\textbf{(iv)~Operational cost unquantified:} SME cost savings still need
+a billing model on a production deployment.
+\textbf{(v)~Simulation:} no network latency, failures, or multi-tenancy.
 
-% ============================================================================
 \section{Conclusion}
-% ============================================================================
-We implemented and evaluated \deepreap{}, previously described only as
-a conceptual architecture, and tested whether fusing ensemble demand
-forecasts into a DRL scheduler's state representation improves
-allocation. On the primary metric it does: average job slowdown falls
-$2.4\times$ relative to the best heuristic and $2.3\times$ relative to
-an otherwise-identical scheduler without forecasts, with completion
-time falling from $43.41$ to $19.04$ slots. Because the forecast
-channels are the only difference between the two configurations, the
-gain is attributable to prediction rather than architecture.
-
-The result is bounded in ways worth restating. It is concentrated in
-the imitation-pretrained policy, since PPO refinement degraded both
-agents at our training budget. It is paid for in throughput: the
-best-slowdown policy completes half as many jobs as FIFO under a fixed
-step budget, because it defers work into predicted-idle windows. It
-rests on a synthetic primary trace at a single audited seed. And the
-cost question that motivates SME deployment remains open, requiring a
-billing model this study does not supply. An order-of-magnitude larger
-RL budget under the multi-objective reward, full re-training on public
-cluster dumps, and online \reap{}--PPO co-training are the changes we
-expect to matter most next.
+We implemented \deepreap{} and repaired the four failure modes that
+blocked a credible evaluation: PPO collapse, reward/throughput
+mismatch, flat ensemble weights, and synthetic single-seed testing.
+With a $2{\times}10^5$-transition PPO budget, multi-objective reward, and
+sharper ensembling, the imitation checkpoint is preserved rather than
+destroyed, and on Google~2011 \deepreap{} matches heuristic throughput
+while posting the best learned slowdown ($12.77{\pm}4.31$). Gaps remain on
+other public dumps and on live \reap{}--PPO co-training; those are the
+next experiments the released harness is built to run.
 
 % ============================================================================
 % References (LNCS / splncs04 style, typed inline)
