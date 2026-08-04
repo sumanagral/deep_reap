@@ -1,0 +1,47 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+build/
+dist/
+venv/
+.venv/
+env/
+
+# --- Test / tooling caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Claude Code local settings ---
+.claude/settings.local.json
+
+# --- Large regenerable model artifacts ---
+# REAP sklearn ensembles are ~20 MB of version-fragile pickles; regenerate
+# with scripts/train_reap.py. The small PyTorch checkpoints under
+# models/deeprm/ are tracked, since they reproduce the paper's numbers.
+*.joblib
+
+# --- Uploaded archives / local notes ---
+*.zip
+chat_session.md
+
+# --- LaTeX build products ---
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc

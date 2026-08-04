@@ -1,0 +1,46 @@
+{
+  "target": "cpu_load",
+  "selected_features": [
+    "hour_of_day",
+    "active_users",
+    "previous_hour_cpu",
+    "network_utilization",
+    "memory_usage",
+    "svc_Compute",
+    "svc_Media",
+    "svc_Web"
+  ],
+  "weights": {
+    "LinearRegression": 0.2047137783564395,
+    "BayesianRidge": 0.20468658124256886,
+    "DecisionTree": 0.13201289720477796,
+    "RandomForest": 0.22712227795670764,
+    "SVR": 0.23146446523950603
+  },
+  "metrics": {
+    "LinearRegression": {
+      "mse": 9.334418304552035,
+      "mae": 2.4535379254354
+    },
+    "BayesianRidge": {
+      "mse": 9.335658587311539,
+      "mae": 2.4537511847111753
+    },
+    "DecisionTree": {
+      "mse": 14.474979953263269,
+      "mae": 2.992401401657846
+    },
+    "RandomForest": {
+      "mse": 8.41345929096621,
+      "mae": 2.3204643935653677
+    },
+    "SVR": {
+      "mse": 8.255625923571369,
+      "mae": 2.296217479849886
+    },
+    "ENSEMBLE": {
+      "mse": 8.066714712366219,
+      "mae": 2.2754547046706532
+    }
+  }
+}
