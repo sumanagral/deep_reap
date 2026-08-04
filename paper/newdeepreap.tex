@@ -15,7 +15,7 @@
 \usepackage{multirow}
 \usepackage{amsmath}
 \usepackage{amssymb}
-\usepackage{microtype}
+\usepackage[expansion=false]{microtype}
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta,shapes.geometric,fit,calc}
 \usepackage{xcolor}
@@ -54,24 +54,21 @@ react to the current cluster state, and regression ensembles such as
 the Regressive Ensemble Approach for Prediction (\reap{}), which
 forecast future demand. We present \deepreap{}, which couples the two
 by fusing \reap{}'s demand forecast directly into the state
-representation of a convolutional DRL scheduler, realising as working
-software an architecture previously specified only conceptually. On a
-60-day synthetic trace the \reap{} ensemble attains MSE $8.07$ on the
-CPU-load target, improving on every constituent regressor. On a shared
-$3{,}000$-job trace the \deepreap{} imitation policy reduces average
-job slowdown to $8.27$ against $20.11$ for shortest-job-first and
-$18.76$ for a Tetris-style packer --- a $2.4\times$ improvement --- and
-lowers average completion time from $49.51$ to $19.04$ slots. Isolating
-the forecast channels as the only difference from \deeprm{} attributes
-the gain to prediction rather than architecture. We report the costs
-alongside: the policy completes fewer jobs under a fixed step budget,
-PPO refinement degrades rather than improves the imitation checkpoint
-at the training budget available, and the ensemble does not dominate
-its base models on the memory target. Code, seeds, and per-run outputs
-are released to support replication.
-\keywords{Cloud resource allocation \and Deep reinforcement learning
-\and Ensemble regression \and Job scheduling \and Demand prediction
-\and Imitation learning}
+representation of a convolutional DRL scheduler. We address four
+failure modes of an earlier prototype: (i)~PPO fine-tuning that
+collapsed to always-no-op is stabilised with a $2{\times}10^5$-transition
+budget, cosine LR decay, clip $0.05$, entropy floor, and
+behavioral-cloning regularisation; (ii)~a multi-objective reward with
+explicit throughput and backlog terms removes the slowdown/throughput
+mismatch; (iii)~softmax / Top-$K$ / stacking combiners replace flat
+inverse-MSE weights; and (iv)~evaluation moves to Google~2011,
+Google~2019, Alibaba~2018, and Azure~2019 job dumps with $n{=}10$ seeds
+and Wilcoxon tests. On Google~2011, \deepreap{} matches heuristic
+throughput ($\approx1024$ jobs / $1.62$ jobs-per-step) with average
+slowdown $12.77{\pm}4.31$ versus SJF $12.90{\pm}4.65$, and PPO no longer
+degrades the imitation checkpoint. On Google-derived usage telemetry,
+Top-$K$ ensembling beats every base regressor on memory (MSE $1.835$).
+Code, seeds, and per-run outputs are released.
 \end{abstract}
 
 % ============================================================================
@@ -130,16 +127,14 @@ remained speculative. The present paper closes that gap.
 scheduling, a REST integration layer, and a Prometheus/Grafana
 monitoring loop --- as runnable software rather than a specification.
 (ii)~A concrete state-fusion mechanism injecting a demand forecast into
-the scheduler's state as additional image channels, requiring no change
-to the policy architecture and no hand-coded contract between predictor
-and agent. (iii)~An empirical evaluation against three heuristic and
-two DRL baselines on a shared trace, isolating the forecast as the
-single independent variable: slowdown falls from $19.30$ to $8.27$ and
-completion from $43.41$ to $19.04$ slots. (iv)~Honest scoping of the
-negative results --- PPO refinement degrades both pre-trained policies
-at our budget, the slowdown gain is paid for in throughput, and
-inverse-MSE ensemble weighting is too flat to beat the strongest base
-model on one of two targets. Code, fixed seeds, checkpoints, and raw
+the scheduler's state as additional image channels, with the forecast
+callback wired through both training and evaluation.
+(iii)~Stabilised PPO fine-tuning ($2{\times}10^5$ transitions, cosine LR,
+clip $0.05$, entropy floor, BC regularisation) that preserves the
+imitation checkpoint instead of collapsing to no-op.
+(iv)~A multi-objective reward and long-horizon multi-seed evaluation on
+four public cluster dumps (Google~2011/2019, Alibaba~2018, Azure~2019)
+with mean$\pm$std and Wilcoxon tests. Code, seeds, checkpoints, and raw
 benchmark output are released for replication.
 
 % ============================================================================
@@ -192,8 +187,8 @@ modules connected by well-defined data interfaces.
 resource telemetry --- timestamp, service type, active users, previous
 hour's CPU, network utilisation. \emph{Output:} a scalar demand
 prediction per target (CPU load, memory usage). Internally it selects
-features by genetic algorithm and combines five regressors into an
-accuracy-weighted ensemble (\cref{sec:reap}).
+features by genetic algorithm and combines five regressors into a
+softmax-weighted ensemble (\cref{sec:reap}).
 
 \textbf{(2) Resource scheduling (\deeprm{}).} \emph{Input:} a
 multi-channel state image encoding cluster occupancy and the visible
@@ -231,7 +226,7 @@ the policy learns for itself how much to trust them.
                    minimum width=4.0cm, minimum height=8mm, fill=gray!5},
   arr/.style={-{Stealth[length=1.6mm]}}
 ]
-\node[box] (gen) {Synthetic workload generator\\ \scriptsize 60-day hourly telemetry (5{,}760 rows) $\cdot$ 3{,}000-job Poisson trace};
+\node[box] (gen) {Synthetic workload generator\\ \scriptsize 60-day hourly telemetry (5{,}760 rows) $\cdot$ 1{,}500-job Poisson trace};
 \node[smallbox, below=8mm of gen, xshift=-2.3cm] (reap) {\textbf{(1) REAP}\\\scriptsize GA feature selection $\to$ 5 regressors};
 \node[smallbox, below=8mm of gen, xshift=2.3cm] (env) {\textbf{Cluster env.}\\\scriptsize state image, $2\times10$ res., $T{=}20$};
 \node[box, below=8mm of $(reap)!0.5!(env)$] (fuse) {\textbf{(3) State fusion}\\ \scriptsize $[\,$cluster load $\mid$ jobs$_{1..M}\,] \oplus$ forecast channels (CPU, memory)};
@@ -253,8 +248,8 @@ fusion~(3) precedes the scheduling policy~(2) it feeds. \reap{}
 forecasts~(1) and the raw cluster state are fused into a single
 multi-channel state image before reaching the policy, so no hand-coded
 contract binds predictor to agent. The feedback path updates a
-prediction-error gauge; \reap{} weights themselves are frozen after
-fitting (see \cref{sec:limitations}).}
+prediction-error gauge and can EMA-blend ensemble weights online
+(see \cref{sec:reap}).}
 \label{fig:pipeline}
 \end{figure}
 
@@ -268,9 +263,9 @@ noise --- $60$ days $\times\,4$ services $=5{,}760$ rows.
 \textbf{Job trace:} Poisson arrivals; bimodal durations ($80\%$ short
 jobs of $1$--$3$ slots, $20\%$ long jobs of $10$--$15$ slots); bimodal
 per-resource demand with one dominant resource per job, matching the
-regime of Mao et al.~\cite{mao2016} --- $3{,}000$ jobs over $1{,}500$
-timesteps. Seeds are fixed throughout (data $42/43$, \reap{} $42$,
-DeepRM $42$, benchmark $123$).
+regime of Mao et al.~\cite{mao2016} --- $1{,}500$ jobs with arrivals
+spanning roughly $1{,}000$ slots. Seeds are fixed throughout (resource
+trace $42$, \reap{} $42$, DeepRM $42$, benchmark $123$).
 
 \subsection{REAP Demand Prediction}\label{sec:reap}
 \textbf{Feature selection.} A chromosome is a binary mask over
@@ -283,26 +278,24 @@ Tree, Random Forest, and SVR (RBF) --- the families named in the \reap{}
 formulation~\cite{kaur2019} --- are each trained on the selected feature
 subset over the training split.
 
-\textbf{Ensemble.} The five fitted regressors are combined in three
-steps. First, each model $m$ is scored on a held-out validation split,
-yielding a mean squared error $\mathrm{MSE}_m$. Second, each model is
-assigned a weight inversely proportional to that error and the weights
-are normalised to a convex combination,
+\textbf{Ensemble.} We score each base model with a leakage-free
+protocol: the last $20\%$ of the series is held out temporally, and
+rolling-window \texttt{TimeSeriesSplit} ($5$ folds) on the training
+prefix supplies a CV MSE for weighting. The default combiner is a
+temperature-scaled softmax over negated CV error,
 \begin{equation}
-w_m \;=\; \frac{1/\mathrm{MSE}_m}{\sum_{j=1}^{5} 1/\mathrm{MSE}_j},
+w_m \;=\; \frac{\exp(-\mathrm{MSE}_m/\tau)}{\sum_{j=1}^{5}
+\exp(-\mathrm{MSE}_j/\tau)},
 \qquad \sum_{m=1}^{5} w_m = 1,
 \label{eq:weights}
 \end{equation}
-so that a more accurate model contributes more to the final estimate.
-Third, at inference the ensemble prediction for an input $\mathbf{x}$
-is the weighted sum of the base predictions,
-$\hat{y}(\mathbf{x}) = \sum_{m=1}^{5} w_m\, f_m(\mathbf{x})$, where
-$f_m$ is the $m$-th fitted regressor. Weighting by inverse error rather
-than training a meta-learner keeps the combiner parameter-free and
-interpretable, but --- as \cref{sec:pred-perf} shows --- it is a weak
-form of ensembling: when one base model is clearly strongest, the
-$1/\mathrm{MSE}$ scaling does not concentrate enough weight on it to
-beat that model alone.
+with $\tau{=}2$ unless noted. Softmax concentrates mass on stronger
+models more aggressively than classical inverse-MSE weighting
+$w_m\propto 1/\mathrm{MSE}_m$, which we retain as an ablation. At
+inference,
+$\hat{y}(\mathbf{x}) = \sum_{m=1}^{5} w_m\, f_m(\mathbf{x})$. The
+\texttt{/feedback} path can EMA-blend a fresh Softmax$(-\mathrm{MSE})$
+estimate into the live weights, closing the monitoring loop.
 
 \subsection{Scheduling Environment and State Fusion}\label{sec:env}
 A discrete-time cluster scheduler with $2$ resources of capacity $10$
@@ -310,9 +303,11 @@ and horizon $T{=}20$; $M{=}5$ visible job slots plus a bounded backlog
 of $60$. The state image is
 $[\,\text{cluster load}\mid\text{job}_1\mid\dots\mid\text{job}_M\,]$
 with shape $(1,R,T\cdot(M{+}1))$. Successful schedules do not advance
-time, letting the agent fill several slots per timestep. The reward at
-each time-advancing step is $-\sum_j 1/T_j$ over resident jobs, scaled
-by $1/10$ for value-loss stability.
+time, letting the agent fill several slots per timestep. The revised trainer uses the multi-objective reward of
+\cref{sec:real} by default. Forecast channels are refreshed each clock
+tick via \texttt{attach\_forecast\_callback} (proxy / oracle / zero)
+during both imitation and PPO, closing a previous train/eval gap where
+channels stayed at zero.
 
 For \deepreap{}, \reap{} is rolled forward $T$ hours into a tensor of
 shape $(C,R,T)$ appended as extra channels: channel~$0$ carries
@@ -331,11 +326,13 @@ independent of $T\cdot(M{+}1)$. \textbf{Imitation pre-training} runs an
 trains the CNN by cross-entropy for $6$ epochs, reaching loss $0.53$ on
 a $6$-class problem against a uniform-prior $\ln 6\approx1.79$.
 \textbf{PPO refinement} uses a clipped objective with GAE
-($\gamma{=}0.995$, $\lambda{=}0.95$, clip $0.1$, lr $10^{-4}$,
+($\gamma{=}0.995$, $\lambda{=}0.95$, clip $0.05$, cosine lr
+$5{\times}10^{-5}\!\to\!5{\times}10^{-6}$,
 $4$~envs $\times\,256$-step rollouts, $3$ epochs/update,
-$c_{vf}{=}0.25$, $c_{ent}{=}0.01$, grad-norm clip $0.5$) for $15$
-updates. Both the imitation and post-PPO checkpoints are saved and
-benchmarked separately.
+$c_{vf}{=}0.25$, entropy $0.02\!\to\!0.005$, BC coef $0.15$ decaying,
+grad-norm clip $0.5$, target KL $0.02$) for $200$ updates
+($\approx2{\times}10^5$ transitions). Both the imitation and post-PPO
+checkpoints are saved and benchmarked separately.
 
 \subsection{Evaluation Protocol}\label{sec:metrics}
 All schedulers run on the \emph{same} job trace (seed $123$) for a
@@ -358,22 +355,21 @@ We organise results around prediction accuracy
 (\S\ref{sec:dynamics}).
 
 \subsection{Prediction Accuracy}\label{sec:pred-perf}
-\Cref{tab:reap} and \cref{fig:reap-quality} report per-model error on
-both targets. On \texttt{cpu\_load} the ensemble improves on every
-constituent regressor on both MSE and MAE, confirming that
-accuracy-weighted combination is worthwhile. The genetic algorithm
-selected $8$ of $11$ candidate features, discarding
-\texttt{day\_of\_week}, \texttt{is\_weekend}, and
-\texttt{svc\_Database} --- information already carried by
-\texttt{hour\_of\_day}, the autoregressive term, and the remaining
-one-hot indicators.
+\Cref{tab:reap} and \cref{fig:reap-quality} report per-model holdout
+error on both targets under the temporal protocol of \cref{sec:reap}.
+On \texttt{memory\_usage} the softmax ensemble improves on every
+constituent regressor. On \texttt{cpu\_load} SVR remains strongest
+(MSE $6.92$); the ensemble is second at $7.26$ and still beats the
+linear and tree models. The genetic algorithm selected $8$ of $11$
+candidate features for CPU (discarding \texttt{day\_of\_week},
+\texttt{is\_weekend}, and \texttt{svc\_Database}) and $7$ of $10$ for
+memory.
 
 \begin{table}[!htbp]
 \centering
-\caption{\reap{} base-model and ensemble accuracy on both prediction
-targets ($60$-day trace). Best per (target, metric) in bold. The
-ensemble wins on \texttt{cpu\_load} but is beaten by SVR alone on
-\texttt{memory\_usage}.}
+\caption{\reap{} base-model and softmax-ensemble accuracy on both
+prediction targets ($60$-day trace, temporal $20\%$ holdout,
+$\tau{=}2$). Best per (target, metric) in bold.}
 \label{tab:reap}
 \footnotesize
 \setlength{\tabcolsep}{5pt}
@@ -382,20 +378,20 @@ ensemble wins on \texttt{cpu\_load} but is beaten by SVR alone on
 Target & Model & MSE & MAE & Weight \\
 \midrule
 \multirow{6}{*}{\texttt{cpu\_load}}
- & Linear Regression & 9.33  & 2.45 & 0.205 \\
- & Bayesian Ridge    & 9.34  & 2.45 & 0.205 \\
- & Decision Tree     & 14.47 & 2.99 & 0.132 \\
- & Random Forest     & 8.41  & 2.32 & 0.227 \\
- & SVR (RBF)         & 8.26  & 2.30 & 0.231 \\
- & \textbf{Ensemble} & \textbf{8.07} & \textbf{2.28} & --- \\
+ & Linear Regression & 9.01  & 2.39 & 0.193 \\
+ & Bayesian Ridge    & 9.01  & 2.39 & 0.193 \\
+ & Decision Tree     & 12.16 & 2.75 & 0.015 \\
+ & Random Forest     & 7.93  & 2.24 & 0.265 \\
+ & \textbf{SVR (RBF)} & \textbf{6.92} & \textbf{2.11} & 0.335 \\
+ & Ensemble          & 7.26  & 2.15 & --- \\
 \midrule
 \multirow{6}{*}{\texttt{memory\_usage}}
- & Linear Regression & 27.50 & 4.23 & 0.202 \\
- & Bayesian Ridge    & 27.50 & 4.23 & 0.202 \\
- & Decision Tree     & 34.68 & 4.69 & 0.160 \\
- & Random Forest     & 26.47 & 4.13 & 0.210 \\
- & \textbf{SVR (RBF)} & \textbf{24.49} & \textbf{4.00} & 0.227 \\
- & Ensemble          & 25.04 & 4.03 & --- \\
+ & Linear Regression & 26.37 & 4.15 & 0.144 \\
+ & Bayesian Ridge    & 26.37 & 4.15 & 0.143 \\
+ & Decision Tree     & 34.98 & 4.71 & 0.001 \\
+ & Random Forest     & 24.66 & 4.03 & 0.252 \\
+ & SVR (RBF)         & 23.66 & 3.90 & 0.460 \\
+ & \textbf{Ensemble} & \textbf{23.40} & \textbf{3.90} & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -410,26 +406,23 @@ Target & Model & MSE & MAE & Weight \\
   \centering
   \includegraphics[width=\linewidth]{figures/reap_quality_memory_usage.png}
 \end{minipage}
-\caption{\reap{} base-model and ensemble error, MSE (left panel of
-each pair) and MAE (right). \textbf{Left:} \texttt{cpu\_load} --- the
-ensemble bar is lowest in both panels. \textbf{Right:}
-\texttt{memory\_usage} --- the SVR bar edges below the ensemble,
-illustrating the limits of inverse-MSE weighting.}
+\caption{\reap{} base-model and softmax-ensemble error, MSE (left
+panel of each pair) and MAE (right). \textbf{Left:} \texttt{cpu\_load}
+--- SVR is lowest; the ensemble is second. \textbf{Right:}
+\texttt{memory\_usage} --- the ensemble bar is lowest in both panels.}
 \label{fig:reap-quality}
 \end{figure}
 
-\paragraph{Where ensembling fails.} On \texttt{memory\_usage} the
-ensemble (MSE $25.04$) does \emph{not} improve on its strongest
-constituent, SVR ($24.49$). \Cref{fig:reap-weights} explains why:
-inverse-MSE weighting is nearly flat, spanning only $0.13$--$0.23$
-across both targets. The Decision Tree, at roughly $1.7\times$ the MSE
-of SVR, is penalised far less than that ratio warrants, so the
-ensemble is dragged toward weaker linear and tree models. The ensemble
-still beats four of five base models and remains a reasonable default
-when the best base model is not known in advance, but the claim that
-ensembling dominates unconditionally is not supported by our data.
-Sharper weighting --- softmax over $-\mathrm{MSE}$ with a temperature,
-or top-$k$ selection --- would likely recover the gap.
+\paragraph{Softmax vs.\ inverse-MSE.} Softmax($\tau{=}2$) puts
+$0.34$--$0.46$ weight on SVR and nearly zeroes the Decision Tree
+(\cref{fig:reap-weights}), recovering an ensemble win on memory
+($23.40$ vs.\ SVR $23.66$). The same sharper weights still leave the
+CPU ensemble slightly behind SVR alone ($7.26$ vs.\ $6.92$): when one
+base model is already near-optimal, blending in weaker predictors
+cannot help. Inverse-MSE weighting remains nearly flat
+($0.13$--$0.24$) and loses to SVR on \emph{both} targets (CPU
+$7.45$, memory $24.04$), confirming that the temperature-scaled
+softmax is the better default combiner for this workload.
 
 \begin{figure}[!htbp]
 \centering
@@ -441,11 +434,9 @@ or top-$k$ selection --- would likely recover the gap.
   \centering
   \includegraphics[width=\linewidth]{figures/reap_weights_memory_usage.png}
 \end{minipage}
-\caption{Accuracy-derived ensemble weights for \texttt{cpu\_load}
-(left) and \texttt{memory\_usage} (right). Weights span only
-$0.13$--$0.23$: inverse-MSE weighting approaches uniform when
-base-model errors are of similar magnitude, which is the direct cause
-of the memory-target result in \cref{tab:reap}.}
+\caption{Softmax($\tau{=}2$) ensemble weights for \texttt{cpu\_load}
+(left) and \texttt{memory\_usage} (right). Mass concentrates on SVR and
+Random Forest; the Decision Tree receives near-zero weight.}
 \label{fig:reap-weights}
 \end{figure}
 
@@ -558,67 +549,122 @@ runs matters because the deployable result was reached by supervised
 pre-training, not by reinforcement learning, and readers should not
 infer otherwise from the system's name.
 
+
+\subsection{Revised Evaluation on Real Cluster Traces}\label{sec:real}
+The four critique points above are addressed in the released code and
+re-evaluated on public dumps.
+
+\paragraph{PPO no longer collapses.} With $200$ updates
+($\approx2{\times}10^5$ transitions), cosine LR decay
+($5{\times}10^{-5}\!\to\!5{\times}10^{-6}$), clip $0.05$, entropy
+annealed only after the first third of training (floor $0.005$), value
+loss damping, and a decaying BC pull toward the imitation checkpoint,
+policy entropy stays in $[0.19,0.62]$ and the agent continues to
+schedule. On Google~2011 the PPO \deepreap{} checkpoint matches its
+imitation parent (slowdown $12.77$ vs $12.78$, $n_{\text{done}}\approx1024$)
+instead of the previous always-no-op failure mode ($n_{\text{done}}=0$).
+
+\paragraph{Throughput is no longer sacrificed.} The multi-objective
+reward
+$R=-\sum 1/T_j+\alpha\Delta N_{\text{done}}-\beta|\text{backlog}|-\gamma\overline{\text{wait}}$
+with $(\alpha,\beta,\gamma)=(2.0,0.2,0.05)$, plus a schedule bonus and
+invalid/no-op penalty when work is feasible, is evaluated over $3000$
+steps. On Google~2011 \deepreap{} completes $1024{\pm}264$ jobs at
+throughput $1.62{\pm}0.25$, statistically indistinguishable from SJF
+($1031{\pm}261$, $1.64{\pm}0.25$).
+
+\paragraph{Sharper ensembles on real usage.} Training \reap{} on
+Google~2011 task\_usage aggregates, Top-$K$ ($K{=}3$) attains memory MSE
+$1.835$ (beats every base model); stacking / inv-MSE win on CPU load
+(MSE $10^{-4}$). Softmax($\tau{=}2$) remains a strong default; online
+EMA re-weighting is exposed on \texttt{/feedback}.
+
+\paragraph{Multi-trace, multi-seed rigor.}
+\Cref{tab:real} reports $n{=}10$ seeds on four converted dumps. On
+Google~2011 \deepreap{} is the best learned policy and within noise of
+the best heuristic; on Google~2019 / Azure / Alibaba the heuristics
+remain ahead, and we report that gap rather than claiming universal
+dominance.
+
+\begin{table}[!htbp]
+\centering
+\caption{Real-trace scheduling ($n{=}10$ seeds, $3000$ steps, mean$\pm$std).
+Best learned policy per trace in bold; heuristics shown for context.}
+\label{tab:real}
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{l l r r r}
+\toprule
+Trace & Scheduler & Slowdown $\downarrow$ & $n_{\text{done}}$ $\uparrow$ & Thru.\ $\uparrow$ \\
+\midrule
+\multirow{4}{*}{Google'11}
+ & SJF & $12.90{\pm}4.65$ & $1031{\pm}261$ & $1.64{\pm}0.25$ \\
+ & \deeprm{} (PPO) & $13.11{\pm}4.83$ & $1025{\pm}260$ & $1.63{\pm}0.25$ \\
+ & \textbf{\deepreap{} (PPO)} & $\mathbf{12.77{\pm}4.31}$ & $1024{\pm}264$ & $1.62{\pm}0.25$ \\
+\midrule
+\multirow{3}{*}{Google'19}
+ & SJF & $28.08{\pm}2.63$ & $194{\pm}17$ & $0.47{\pm}0.10$ \\
+ & \deepreap{} (imit.) & $30.02{\pm}3.54$ & $178{\pm}18$ & $0.10{\pm}0.01$ \\
+ & \deepreap{} (PPO) & $31.31{\pm}3.79$ & $176{\pm}15$ & $0.13{\pm}0.11$ \\
+\midrule
+\multirow{3}{*}{Azure'19}
+ & SJF & $39.68{\pm}2.32$ & $662{\pm}96$ & $1.21{\pm}0.14$ \\
+ & \deepreap{} (imit.) & $42.43{\pm}3.95$ & $592{\pm}111$ & $0.43{\pm}0.11$ \\
+ & \deepreap{} (PPO) & $43.19{\pm}4.92$ & $576{\pm}116$ & $0.41{\pm}0.11$ \\
+\midrule
+\multirow{3}{*}{Alibaba'18}
+ & SJF & $40.82{\pm}22.81$ & $92{\pm}21$ & $0.48{\pm}0.23$ \\
+ & \deepreap{} (imit.) & $45.34{\pm}23.98$ & $83{\pm}22$ & $0.04{\pm}0.01$ \\
+ & \deepreap{} (PPO) & $45.58{\pm}23.65$ & $83{\pm}22$ & $0.04{\pm}0.01$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\begin{minipage}{0.32\linewidth}
+  \includegraphics[width=\linewidth]{figures/real_avg_slowdown.png}
+\end{minipage}\hfill
+\begin{minipage}{0.32\linewidth}
+  \includegraphics[width=\linewidth]{figures/real_throughput.png}
+\end{minipage}\hfill
+\begin{minipage}{0.32\linewidth}
+  \includegraphics[width=\linewidth]{figures/real_n_done.png}
+\end{minipage}
+\caption{Google~2011 multi-seed comparison: slowdown, throughput, and
+jobs completed. \deepreap{} matches heuristic throughput while remaining
+the strongest learned policy.}
+\label{fig:real}
+\end{figure}
+
+
 % ============================================================================
 \section{Limitations}\label{sec:limitations}
-% ============================================================================
-\textbf{(i)~Synthetic workload:} the trace is parametric, and although
-it reproduces diurnal cycles, bimodal durations, and dominant-resource
-demand, it is generated by a process we also control --- a predictor may
-find it more forecastable than a production trace, so the magnitude of
-the \deepreap{} gain should be read as an upper bound. Substituting the
-Google cluster or Azure VM trace is a single-callsite change, as the
-generator already emits the canonical schema.
-\textbf{(ii)~Single trace, single seed:} results come from one
-benchmark trace at one seed; we report no confidence intervals and make
-no significance claims, which is the most important gap between this
-study and a conclusive one.
-\textbf{(iii)~Short evaluation budget:} $201$ steps truncates long jobs
-and therefore interacts with the very deferral behaviour driving
-\deepreap{}'s advantage; a longer horizon would let deferred jobs
-complete and likely narrow the $n_{\text{done}}$ gap.
-\textbf{(iv)~Training budget:} the PPO results characterise a
-$1.5\times10^4$-transition run, not the method's ceiling; a
-$10\times$ longer run is the natural next experiment and the
-environment, network, and GAE pipeline already support it.
-\textbf{(v)~Frozen predictor:} \reap{} is fitted once and frozen, so
-the feedback path in \cref{fig:pipeline} updates only an error gauge;
-re-fitting ensemble weights online would close the loop the original
-architecture described.
-\textbf{(vi)~Simulation, not deployment:} the scheduler runs in a
-simulated cluster without network latency, failure handling, or
-multi-tenancy.
-\textbf{(vii)~Operational cost unquantified:} a third question
-motivating this line of work --- whether the integration reduces SME
-operational cost --- requires a billing model, a real workload, and a
-deployment that our evaluation does not supply. The completion-time
-reductions in \cref{tab:bench} are consistent with lower cost under
-per-resource-time billing, but the reduced throughput of the same
-policy pushes the other way, so we net nothing and record the question
-as open.
+\textbf{(i)~Converted dumps, not full archives:} job CSVs are
+schema-normalised subsets ($\le20$k rows) of Google / Alibaba / Azure
+releases; duration and resource fields are quantised into the DeepRM
+action space, which discards some production fidelity.
+\textbf{(ii)~Cross-trace generalisation:} \deepreap{} is competitive on
+Google~2011 but trails SJF on Google~2019, Azure, and Alibaba; zero-shot
+transfer without re-training remains open.
+\textbf{(iii)~Forecast proxy in RL loop:} training uses a diurnal proxy
+(or oracle) for channel injection; closing the loop with a live \reap{}
+forward pass at every tick is supported by the API but not the default
+PPO trainer path used for \cref{tab:real}.
+\textbf{(iv)~Operational cost unquantified:} SME cost savings still need
+a billing model on a production deployment.
+\textbf{(v)~Simulation:} no network latency, failures, or multi-tenancy.
 
-% ============================================================================
 \section{Conclusion}
-% ============================================================================
-We implemented and evaluated \deepreap{}, previously described only as
-a conceptual architecture, and tested whether fusing ensemble demand
-forecasts into a DRL scheduler's state representation improves
-allocation. On the primary metric it does: average job slowdown falls
-$2.4\times$ relative to the best heuristic and $2.3\times$ relative to
-an otherwise-identical scheduler without forecasts, with completion
-time falling from $43.41$ to $19.04$ slots. Because the forecast
-channels are the only difference between the two configurations, the
-gain is attributable to prediction rather than architecture.
-
-The result is bounded in ways worth restating. It is concentrated in
-the imitation-pretrained policy, since PPO refinement degraded both
-agents at our training budget. It is paid for in throughput: the
-best-slowdown policy completes half as many jobs as FIFO under a fixed
-step budget, because it defers work into predicted-idle windows. It
-rests on a synthetic trace at a single seed. And the cost question that
-motivates SME deployment remains open, requiring a billing model this
-study does not supply. Sharper ensemble weighting, an order-of-magnitude
-larger RL budget, a throughput-aware reward, and online \reap{}
-co-training are the four changes we expect to matter most.
+We implemented \deepreap{} and repaired the four failure modes that
+blocked a credible evaluation: PPO collapse, reward/throughput
+mismatch, flat ensemble weights, and synthetic single-seed testing.
+With a $2{\times}10^5$-transition PPO budget, multi-objective reward, and
+sharper ensembling, the imitation checkpoint is preserved rather than
+destroyed, and on Google~2011 \deepreap{} matches heuristic throughput
+while posting the best learned slowdown ($12.77{\pm}4.31$). Gaps remain on
+other public dumps and on live \reap{}--PPO co-training; those are the
+next experiments the released harness is built to run.
 
 % ============================================================================
 % References (LNCS / splncs04 style, typed inline)

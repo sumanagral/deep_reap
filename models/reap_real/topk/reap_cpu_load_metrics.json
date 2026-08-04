@@ -1,0 +1,53 @@
+{
+  "target": "cpu_load",
+  "selected_features": [
+    "network_utilization",
+    "memory_usage"
+  ],
+  "scheme": "topk",
+  "temperature": 2.0,
+  "top_k": 3,
+  "weights": {
+    "LinearRegression": 0.0,
+    "BayesianRidge": 0.0,
+    "DecisionTree": 0.33434661033345575,
+    "RandomForest": 0.33436733817231473,
+    "SVR": 0.33128605149422957
+  },
+  "metrics": {
+    "LinearRegression": {
+      "mse": 0.06332843939187661,
+      "mae": 0.18711943215019236,
+      "cv_mse": 0.05914509588460859
+    },
+    "BayesianRidge": {
+      "mse": 0.06332864211660888,
+      "mae": 0.18711981897813834,
+      "cv_mse": 0.05914525213334641
+    },
+    "DecisionTree": {
+      "mse": 0.00020619610433509193,
+      "mae": 0.007789691964337282,
+      "cv_mse": 0.0008408603611076145
+    },
+    "RandomForest": {
+      "mse": 7.708714600415301e-05,
+      "mae": 0.004325648297906499,
+      "cv_mse": 0.0007168740802059658
+    },
+    "SVR": {
+      "mse": 0.015292051933799202,
+      "mae": 0.06166519169382364,
+      "cv_mse": 0.019232868945461196
+    },
+    "ENSEMBLE": {
+      "mse": 0.0017351327977116102,
+      "mae": 0.020582900293100836,
+      "scheme": "topk",
+      "temperature": 2.0,
+      "top_k": 3,
+      "timeseries_cv": true,
+      "n_splits": 5
+    }
+  }
+}

@@ -102,6 +102,13 @@ def _ensure_canonical(df: pd.DataFrame, n_resources: int = 2) -> pd.DataFrame:
     out["arrival_time"] = out["arrival_time"] - int(out["arrival_time"].min())
     out["duration"] = out["duration"].clip(1, 15)
 
+    # If a converter collapsed every arrival to the same slot (common when a
+    # trace shard starts at timestamp 0), spread jobs uniformly over a
+    # DeepRM-compatible horizon so the scheduler sees a real arrival process.
+    if len(out) > 1 and int(out["arrival_time"].nunique()) <= 1:
+        horizon = min(2000, max(100, len(out) // 2))
+        out["arrival_time"] = np.linspace(0, horizon, num=len(out), dtype=int)
+
     cols = ["job_id", "arrival_time", "duration"] + [f"res_{r}" for r in range(n_resources)]
     return out[cols].reset_index(drop=True)
 

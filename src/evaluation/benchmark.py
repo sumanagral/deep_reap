@@ -28,6 +28,7 @@ from scipy import stats
 
 from src.deeprm.baselines import run_baseline
 from src.deeprm.env import ClusterConfig, ClusterEnv
+from src.deeprm.forecasts import attach_forecast_callback, build_offline_utilization
 from src.deeprm.network import CNNPolicy
 
 
@@ -74,9 +75,19 @@ def _make_env(
     reap_channels: int,
     seed: int,
     episode_max_steps: int = 2000,
+    forecast_mode: str = "proxy",
+    util_timeline: np.ndarray | None = None,
 ) -> ClusterEnv:
     cfg = ClusterConfig(reap_channels=reap_channels, episode_max_steps=episode_max_steps)
-    return ClusterEnv(cfg=cfg, job_trace=trace, seed=seed)
+    env = ClusterEnv(cfg=cfg, job_trace=trace, seed=seed)
+    if reap_channels > 0:
+        attach_forecast_callback(
+            env,
+            mode=forecast_mode,
+            util_timeline=util_timeline,
+            seed=seed,
+        )
+    return env
 
 
 def _load_policy(path: Path) -> tuple[CNNPolicy, dict]:
@@ -319,6 +330,9 @@ def run_benchmark(
     deepreap_path: str,
     trace_source: str = "canonical",
     include_ilp: bool = True,
+    forecast_mode: str = "proxy",
+    deeprm_imi_path: str = "models/deeprm/deeprm_plus_imitation.pt",
+    deepreap_imi_path: str = "models/deeprm/deepreap_imitation.pt",
 ) -> tuple[dict, dict]:
     """Run all schedulers across seeds; return (per_seed_raw, summary)."""
     per_seed: dict[str, list[dict]] = {}
@@ -328,7 +342,19 @@ def run_benchmark(
 
     for seed in seeds:
         trace = _load_trace(job_trace, trace_source, seed=seed)
+        # Per-seed windowing on large real dumps → non-degenerate CIs.
+        if trace is not None and len(trace) > 4000:
+            rng = np.random.default_rng(seed)
+            start = int(rng.integers(0, max(1, len(trace) - 4000)))
+            trace = trace.iloc[start : start + 4000].reset_index(drop=True)
+            # Re-base arrivals so the window starts at t=0.
+            trace = trace.copy()
+            trace["arrival_time"] = trace["arrival_time"] - int(trace["arrival_time"].min())
         print(f"[bench] seed={seed}  trace_rows={0 if trace is None else len(trace)}")
+        util_timeline = None
+        if forecast_mode == "oracle" and trace is not None and len(trace) > 0:
+            # Cap oracle build cost on large real dumps.
+            util_timeline = build_offline_utilization(trace.head(min(len(trace), 4000)))
 
         for name in heuristics:
             env = _make_env(trace, reap_channels=0, seed=seed, episode_max_steps=episode_max_steps)
@@ -338,13 +364,14 @@ def run_benchmark(
             print(
                 f"[bench]   {name:12s}  slow={m.get('avg_slowdown', 0):.2f}  "
                 f"p95={m.get('p95_slowdown', 0):.2f}  n_done={m.get('n_done', 0)}  "
+                f"thru={m.get('throughput', 0):.3f}  "
                 f"frag={m.get('fragmentation', 0):.3f}  sla={m.get('sla_breach_rate', 0):.3f}"
             )
 
         for label, ckpt_path, reap_ch in [
-            ("deeprm_plus_imitation", "models/deeprm/deeprm_plus_imitation.pt", 0),
+            ("deeprm_plus_imitation", deeprm_imi_path, 0),
             ("deeprm_plus", deeprm_path, 0),
-            ("deepreap_imitation", "models/deeprm/deepreap_imitation.pt", 2),
+            ("deepreap_imitation", deepreap_imi_path, 2),
             ("deepreap", deepreap_path, 2),
         ]:
             p = Path(ckpt_path)
@@ -355,6 +382,8 @@ def run_benchmark(
             env = _make_env(
                 trace, reap_channels=reap_ch_actual, seed=seed,
                 episode_max_steps=episode_max_steps,
+                forecast_mode=forecast_mode,
+                util_timeline=util_timeline,
             )
             policy, _ = _load_policy(p)
             m = run_policy(env, policy, max_steps=max_steps, profile_latency=True)
@@ -363,6 +392,7 @@ def run_benchmark(
             print(
                 f"[bench]   {label:24s}  slow={m.get('avg_slowdown', 0):.2f}  "
                 f"p95={m.get('p95_slowdown', 0):.2f}  n_done={m.get('n_done', 0)}  "
+                f"thru={m.get('throughput', 0):.3f}  "
                 f"lat_ms={m.get('cnn_latency_mean_ms', 0):.3f}"
             )
 
@@ -395,6 +425,13 @@ def main() -> None:
     ap.add_argument("--no-ilp", action="store_true", help="skip short-horizon ILP baseline")
     ap.add_argument("--deeprm-path", default="models/deeprm/deeprm_plus.pt")
     ap.add_argument("--deepreap-path", default="models/deeprm/deepreap.pt")
+    ap.add_argument("--deeprm-imi-path", default="models/deeprm/deeprm_plus_imitation.pt")
+    ap.add_argument("--deepreap-imi-path", default="models/deeprm/deepreap_imitation.pt")
+    ap.add_argument(
+        "--forecast-mode", default="proxy",
+        choices=["proxy", "oracle", "zero"],
+        help="Forecast channels for DeepREAP policies at eval time",
+    )
     ap.add_argument("--reap-cpu-metrics", default="models/reap/reap_cpu_load_metrics.json")
     ap.add_argument("--reap-mem-metrics", default="models/reap/reap_memory_usage_metrics.json")
     args = ap.parse_args()
@@ -418,6 +455,9 @@ def main() -> None:
         deepreap_path=args.deepreap_path,
         trace_source=args.trace_source,
         include_ilp=not args.no_ilp,
+        forecast_mode=args.forecast_mode,
+        deeprm_imi_path=args.deeprm_imi_path,
+        deepreap_imi_path=args.deepreap_imi_path,
     )
 
     # serialize raw + summary

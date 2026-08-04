@@ -1,0 +1,53 @@
+{
+  "target": "memory_usage",
+  "selected_features": [
+    "active_users",
+    "network_utilization"
+  ],
+  "scheme": "softmax",
+  "temperature": 2.0,
+  "top_k": 3,
+  "weights": {
+    "LinearRegression": 0.23434015764046362,
+    "BayesianRidge": 0.23431492864934234,
+    "DecisionTree": 0.18206857075852365,
+    "RandomForest": 0.20889835110463142,
+    "SVR": 0.14037799184703909
+  },
+  "metrics": {
+    "LinearRegression": {
+      "mse": 1.8391494266500112,
+      "mae": 1.1218037938373864,
+      "cv_mse": 1.8515052055472854
+    },
+    "BayesianRidge": {
+      "mse": 1.8385378259319454,
+      "mae": 1.1212210834274705,
+      "cv_mse": 1.85172053653917
+    },
+    "DecisionTree": {
+      "mse": 2.278957311617748,
+      "mae": 1.1304837577810636,
+      "cv_mse": 2.356285898368125
+    },
+    "RandomForest": {
+      "mse": 1.9447005715374839,
+      "mae": 1.1145296153613788,
+      "cv_mse": 2.081357104820028
+    },
+    "SVR": {
+      "mse": 2.6369575291362803,
+      "mae": 1.1051835753140982,
+      "cv_mse": 2.876375203269543
+    },
+    "ENSEMBLE": {
+      "mse": 1.8817115130246438,
+      "mae": 1.118235497513279,
+      "scheme": "softmax",
+      "temperature": 2.0,
+      "top_k": 3,
+      "timeseries_cv": true,
+      "n_splits": 5
+    }
+  }
+}

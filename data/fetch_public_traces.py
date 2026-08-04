@@ -116,8 +116,14 @@ def convert_google2011(path: Path, max_jobs: int, max_resource: int = 10) -> pd.
     event_type 0 = SUBMIT. We keep SUBMIT rows with resource requests, use
     timestamp (µs) as arrival, and estimate duration from later FINISH/EVICT
     events when present; otherwise sample a DeepRM-compatible duration.
+
+    Part-00000 of the public dump begins with a long run of timestamp=0;
+    callers should prefer later shards or pass a concatenated multi-shard file.
     """
     df = pd.read_csv(path, header=None, names=G2011_COLS, low_memory=False)
+    # Drop the all-zero timestamp prefix that dominates early shards.
+    if (df["timestamp"] > 0).any():
+        df = df[df["timestamp"] > 0].copy()
     # SUBMIT events with resource requests
     sub = df[(df["event_type"] == 0) & df["cpu_request"].notna()].copy()
     if sub.empty:
@@ -315,7 +321,24 @@ def main() -> None:
         raw = DUMPS / "google2011_task_events_part0.csv.gz"
         if not args.skip_download:
             _download(URLS["google2011"], raw)
-        if raw.exists():
+        # Prefer later local shards (part-00000 is almost all timestamp=0).
+        shard_dir = REAL / "raw" / "google2011"
+        shard_paths = sorted(shard_dir.glob("part-*.csv.gz")) if shard_dir.exists() else []
+        usable = [p for p in shard_paths if "part-00000" not in p.name]
+        if usable:
+            frames = []
+            for p in usable:
+                frames.append(pd.read_csv(p, header=None, names=G2011_COLS, low_memory=False))
+            concat = pd.concat(frames, ignore_index=True)
+            tmp = DUMPS / "google2011_task_events_merged.csv.gz"
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            concat.to_csv(tmp, index=False, header=False, compression="gzip")
+            jobs = convert_google2011(tmp, max_jobs=args.max_jobs)
+            out = REAL / "google2011_jobs.csv"
+            jobs.to_csv(out, index=False)
+            written["google2011"] = {"path": str(out), "n_jobs": len(jobs), "shards": len(usable)}
+            print(f"[convert] google2011 → {out} rows={len(jobs)} (from {len(usable)} shards)")
+        elif raw.exists():
             jobs = convert_google2011(raw, max_jobs=args.max_jobs)
             out = REAL / "google2011_jobs.csv"
             jobs.to_csv(out, index=False)
@@ -357,14 +380,27 @@ def main() -> None:
 
     if "azure" in sources:
         raw = DUMPS / "azure_vmtable.csv.gz"
+        sample = REAL / "raw" / "azure2019_vmtable_sample.csv"
         if not args.skip_download:
-            _download(URLS["azure"], raw)
-        if raw.exists():
-            jobs = convert_azure(raw, max_jobs=args.max_jobs)
+            try:
+                _download(URLS["azure"], raw)
+            except RuntimeError as exc:
+                print(f"[fetch] azure download skipped: {exc}")
+        src = raw if raw.exists() else sample
+        if src.exists():
+            # Sample has a header; full dump does not.
+            if src == sample:
+                df = pd.read_csv(src)
+                tmp = DUMPS / "azure_vmtable_from_sample.csv"
+                tmp.parent.mkdir(parents=True, exist_ok=True)
+                df.to_csv(tmp, index=False, header=False)
+                jobs = convert_azure(tmp, max_jobs=args.max_jobs)
+            else:
+                jobs = convert_azure(src, max_jobs=args.max_jobs)
             out = REAL / "azure2019_jobs.csv"
             jobs.to_csv(out, index=False)
-            written["azure"] = {"path": str(out), "n_jobs": len(jobs)}
-            print(f"[convert] azure → {out} rows={len(jobs)}")
+            written["azure"] = {"path": str(out), "n_jobs": len(jobs), "source": str(src)}
+            print(f"[convert] azure → {out} rows={len(jobs)} (from {src.name})")
 
     # relativize paths for portability
     for v in written.values():

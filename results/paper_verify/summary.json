@@ -1,0 +1,166 @@
+{
+  "benchmark_verified": true,
+  "job_trace_n": 1500,
+  "resource_usage_n": 5760,
+  "inv_mse": {
+    "cpu": {
+      "mse": 7.446900419503692,
+      "mae": 2.1723824755215424,
+      "scheme": "inv_mse",
+      "temperature": 2.0,
+      "top_k": 3,
+      "timeseries_cv": true,
+      "n_splits": 5
+    },
+    "mem": {
+      "mse": 24.042696319294308,
+      "mae": 3.964701227475251,
+      "scheme": "inv_mse",
+      "temperature": 2.0,
+      "top_k": 3,
+      "timeseries_cv": true,
+      "n_splits": 5
+    },
+    "cpu_svr": {
+      "mse": 6.923502010329821,
+      "mae": 2.1121513482600016,
+      "cv_mse": 7.963723154038687
+    },
+    "mem_svr": {
+      "mse": 23.659349150913677,
+      "mae": 3.9025700901211247,
+      "cv_mse": 24.346357868842357
+    },
+    "weights_cpu": {
+      "LinearRegression": 0.20613338785198768,
+      "BayesianRidge": 0.20612630736726462,
+      "DecisionTree": 0.1315125559493735,
+      "RandomForest": 0.2216072614582962,
+      "SVR": 0.234620487373078
+    },
+    "weights_mem": {
+      "LinearRegression": 0.2062225542931641,
+      "BayesianRidge": 0.20615281421346648,
+      "DecisionTree": 0.1463976892557539,
+      "RandomForest": 0.2153043972888229,
+      "SVR": 0.2259225449487925
+    }
+  },
+  "softmax": {
+    "cpu": {
+      "mse": 7.257069469830191,
+      "mae": 2.1461055836719316,
+      "scheme": "softmax",
+      "temperature": 2.0,
+      "top_k": 3,
+      "timeseries_cv": true,
+      "n_splits": 5
+    },
+    "mem": {
+      "mse": 23.397779923414365,
+      "mae": 3.897338781098041,
+      "scheme": "softmax",
+      "temperature": 2.0,
+      "top_k": 3,
+      "timeseries_cv": true,
+      "n_splits": 5
+    },
+    "cpu_svr": {
+      "mse": 6.923502010329821,
+      "mae": 2.1121513482600016,
+      "cv_mse": 7.963723154038687
+    },
+    "mem_svr": {
+      "mse": 23.659349150913677,
+      "mae": 3.9025700901211247,
+      "cv_mse": 24.346357868842357
+    },
+    "weights_cpu": {
+      "LinearRegression": 0.1929658011333053,
+      "BayesianRidge": 0.19293576252145056,
+      "DecisionTree": 0.014745725335803542,
+      "RandomForest": 0.2647995079992898,
+      "SVR": 0.3345532030101508
+    },
+    "weights_mem": {
+      "LinearRegression": 0.14380141503289803,
+      "BayesianRidge": 0.14315411674793233,
+      "DecisionTree": 0.0006179820287214456,
+      "RandomForest": 0.25238783558654315,
+      "SVR": 0.460038650603905
+    },
+    "metrics_cpu": {
+      "LinearRegression": {
+        "mse": 9.008366232409086,
+        "mae": 2.3912999217119446,
+        "cv_mse": 9.064289038568173
+      },
+      "BayesianRidge": {
+        "mse": 9.008309083001125,
+        "mae": 2.3912828371774344,
+        "cv_mse": 9.064600398922673
+      },
+      "DecisionTree": {
+        "mse": 12.155454931527172,
+        "mae": 2.75092586099296,
+        "cv_mse": 14.207408526492125
+      },
+      "RandomForest": {
+        "mse": 7.934863024154702,
+        "mae": 2.2424985818212826,
+        "cv_mse": 8.431369060469954
+      },
+      "SVR": {
+        "mse": 6.923502010329821,
+        "mae": 2.1121513482600016,
+        "cv_mse": 7.963723154038687
+      },
+      "ENSEMBLE": {
+        "mse": 7.257069469830191,
+        "mae": 2.1461055836719316,
+        "scheme": "softmax",
+        "temperature": 2.0,
+        "top_k": 3,
+        "timeseries_cv": true,
+        "n_splits": 5
+      }
+    },
+    "metrics_mem": {
+      "LinearRegression": {
+        "mse": 26.372151168556744,
+        "mae": 4.146839289287566,
+        "cv_mse": 26.672112315807215
+      },
+      "BayesianRidge": {
+        "mse": 26.374186145735482,
+        "mae": 4.146930594464635,
+        "cv_mse": 26.68113530802977
+      },
+      "DecisionTree": {
+        "mse": 34.975476550498385,
+        "mae": 4.707104554526893,
+        "cv_mse": 37.57157069022516
+      },
+      "RandomForest": {
+        "mse": 24.663938331453178,
+        "mae": 4.030891382343753,
+        "cv_mse": 25.54704501780581
+      },
+      "SVR": {
+        "mse": 23.659349150913677,
+        "mae": 3.9025700901211247,
+        "cv_mse": 24.346357868842357
+      },
+      "ENSEMBLE": {
+        "mse": 23.397779923414365,
+        "mae": 3.897338781098041,
+        "scheme": "softmax",
+        "temperature": 2.0,
+        "top_k": 3,
+        "timeseries_cv": true,
+        "n_splits": 5
+      }
+    }
+  },
+  "latency_ms_total_mean": 0.14246909999712898
+}

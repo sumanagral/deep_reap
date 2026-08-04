@@ -41,11 +41,16 @@ class ClusterConfig:
     episode_max_steps: int = 2000
     reap_channels: int = 0           # appended channels for REAP forecast (optional)
     # Multi-objective reward weights
-    reward_throughput_coef: float = 0.5   # α: bonus per newly completed job
-    reward_backlog_coef: float = 0.05     # β: per backlog job
-    reward_wait_coef: float = 0.01        # γ: age-weighted wait of queued jobs
+    # Tuned so no-op-forever is strictly worse than draining the queue:
+    # throughput and backlog dominate the slowdown term that otherwise
+    # encouraged hoarding (or, with a weak β, total inaction).
+    reward_throughput_coef: float = 2.0   # α: bonus per newly completed job
+    reward_backlog_coef: float = 0.2      # β: per backlog job
+    reward_wait_coef: float = 0.05        # γ: age-weighted wait of queued jobs
     reward_slowdown_scale: float = 10.0   # divisor for Σ 1/T_j term
     reward_frag_coef: float = 0.02        # δ: multi-resource fragmentation penalty
+    reward_schedule_bonus: float = 0.1    # ε: bonus for a successful schedule action
+    reward_invalid_penalty: float = 0.05  # ζ: penalty for invalid / forced no-op
     # SLA: max allowable waiting time (arrival → start); jobs above count as breach
     sla_max_wait: int = 30
 
@@ -129,7 +134,7 @@ class ClusterEnv:
                 # IMPORTANT: do NOT advance time after a successful schedule;
                 # let the agent fill more slots in the same timestep.
                 obs = self._observation()
-                reward = 0.0
+                reward = float(self.cfg.reward_schedule_bonus)
                 done = self._steps >= self.cfg.episode_max_steps and not self._has_work()
                 self._steps += 1
                 return obs, reward, done, info
@@ -140,11 +145,22 @@ class ClusterEnv:
         info["advanced"] = True
         self._advance_one_step()
         reward = self._reward()
+        if info.get("invalid"):
+            reward -= float(self.cfg.reward_invalid_penalty)
+        # Extra push: if work was schedulable and the agent chose no-op, penalize.
+        elif action >= self.cfg.n_visible and self._any_schedulable():
+            reward -= float(self.cfg.reward_invalid_penalty)
         done = self._steps >= self.cfg.episode_max_steps or not self._has_work()
         self._steps += 1
         return self._observation(), reward, done, info
 
     # ----------------------------------------------------------- core dynamics
+    def _any_schedulable(self) -> bool:
+        for j in self.visible:
+            if j is not None and self._can_schedule(j):
+                return True
+        return False
+
     def _has_work(self) -> bool:
         return (
             any(s is not None for s in self.visible)

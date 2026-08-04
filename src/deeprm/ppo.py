@@ -31,12 +31,15 @@ class PPOConfig:
     minibatch_size: int = 128
     lr: float = 5e-5                  # lower LR for fine-tuning from imitation
     lr_end: float = 5e-6              # cosine-decay floor
-    ent_coef: float = 0.005           # start modest; annealed further
-    ent_coef_end: float = 0.001
-    vf_coef: float = 0.5
+    ent_coef: float = 0.02            # keep exploration alive early
+    ent_coef_end: float = 0.005       # non-zero floor prevents no-op collapse
+    vf_coef: float = 0.25             # don't let value loss dominate the policy
     max_grad_norm: float = 0.5
-    target_kl: float = 0.015          # abort epoch if approx KL exceeds this
+    target_kl: float = 0.02           # abort epoch if approx KL exceeds this
     lr_schedule: str = "cosine"       # "cosine" | "linear" | "constant"
+    reward_scale: float = 0.1         # dampen raw reward magnitude before GAE
+    value_clip: float = 10.0          # Huber-like clip on value targets
+    bc_coef: float = 0.1              # behavioral-cloning pull toward imitation
 
 
 class _RolloutBuf:
@@ -78,10 +81,21 @@ def train_ppo(
     device: str = "cpu",
     verbose: bool = True,
     seed: int = 0,
+    bc_policy: CNNPolicy | None = None,
 ) -> dict:
+    """
+    PPO fine-tune. If `bc_policy` is provided (typically a frozen copy of the
+    imitation checkpoint), a cross-entropy BC term keeps the policy from
+    collapsing to the always-no-op attractor.
+    """
     cfg = cfg or PPOConfig()
     policy.to(device)
     opt = torch.optim.Adam(policy.parameters(), lr=cfg.lr)
+    if bc_policy is not None:
+        bc_policy.to(device)
+        bc_policy.eval()
+        for p in bc_policy.parameters():
+            p.requires_grad_(False)
 
     envs = [env_factory(seed + i) for i in range(cfg.n_envs)]
     obs = np.stack([e.reset() for e in envs])  # (n_envs, C, H, W)
@@ -98,13 +112,17 @@ def train_ppo(
         "clip_range": [],
         "ent_coef": [],
         "transitions": [],
+        "bc_loss": [],
     }
     transitions_seen = 0
 
     for update in range(cfg.total_updates):
         progress = update / max(cfg.total_updates - 1, 1)
         lr_now = _annealed(cfg.lr, cfg.lr_end, progress, cfg.lr_schedule)
-        ent_now = _annealed(cfg.ent_coef, cfg.ent_coef_end, progress, cfg.lr_schedule)
+        # Hold entropy high for the first third, then anneal to the floor.
+        ent_progress = max(0.0, (progress - 0.33) / 0.67)
+        ent_now = _annealed(cfg.ent_coef, cfg.ent_coef_end, ent_progress, cfg.lr_schedule)
+        bc_now = cfg.bc_coef * (1.0 - progress)  # stronger early, fade out
         for g in opt.param_groups:
             g["lr"] = lr_now
 
@@ -128,7 +146,7 @@ def train_ppo(
                     ep_rewards[i] = 0.0
                     ns = env.reset(seed=seed + update * cfg.n_envs + i + 1000)
                 new_obs.append(ns)
-                rewards.append(r)
+                rewards.append(r * cfg.reward_scale)
                 dones.append(float(d))
 
             buf.s[t] = s
@@ -154,6 +172,8 @@ def train_ppo(
             last_gae = delta + cfg.gamma * cfg.gae_lambda * next_nonterm * last_gae
             adv[t] = last_gae
         returns = adv + buf.v
+        # Clip return magnitude so a few catastrophic episodes cannot blow up V.
+        returns = torch.clamp(returns, -cfg.value_clip, cfg.value_clip)
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
         # flatten
@@ -165,7 +185,7 @@ def train_ppo(
 
         N = b_s.size(0)
         idx = np.arange(N)
-        last_pl, last_vl, last_ent, last_kl = 0.0, 0.0, 0.0, 0.0
+        last_pl, last_vl, last_ent, last_kl, last_bc = 0.0, 0.0, 0.0, 0.0, 0.0
         early_stopped = False
 
         for _ in range(cfg.epochs):
@@ -181,9 +201,20 @@ def train_ppo(
                 pg1 = ratio * b_adv[mb]
                 pg2 = torch.clamp(ratio, 1 - cfg.clip_range, 1 + cfg.clip_range) * b_adv[mb]
                 pg_loss = -torch.min(pg1, pg2).mean()
-                v_loss = F.mse_loss(vals, b_ret[mb])
+                v_loss = F.smooth_l1_loss(vals, b_ret[mb])
                 ent = dist.entropy().mean()
-                loss = pg_loss + cfg.vf_coef * v_loss - ent_now * ent
+                bc_loss = torch.tensor(0.0, device=device)
+                if bc_policy is not None and bc_now > 0:
+                    with torch.no_grad():
+                        bc_logits, _ = bc_policy(b_s[mb])
+                        bc_targets = torch.argmax(bc_logits, dim=-1)
+                    bc_loss = F.cross_entropy(logits, bc_targets)
+                loss = (
+                    pg_loss
+                    + cfg.vf_coef * v_loss
+                    - ent_now * ent
+                    + bc_now * bc_loss
+                )
 
                 opt.zero_grad()
                 loss.backward()
@@ -194,6 +225,7 @@ def train_ppo(
                     approx_kl = (b_lp[mb] - new_lp).mean().item()
                 last_pl, last_vl = pg_loss.item(), v_loss.item()
                 last_ent, last_kl = ent.item(), approx_kl
+                last_bc = float(bc_loss.item()) if torch.is_tensor(bc_loss) else 0.0
                 if approx_kl > cfg.target_kl:
                     early_stopped = True
                     break
@@ -201,7 +233,7 @@ def train_ppo(
         mean_r = (
             float(np.mean(finished_rewards))
             if finished_rewards
-            else float(buf.r.sum().item() / cfg.n_envs)
+            else float(buf.r.sum().item() / cfg.n_envs / max(cfg.reward_scale, 1e-8))
         )
         history["update"].append(update)
         history["mean_reward"].append(mean_r)
@@ -213,11 +245,12 @@ def train_ppo(
         history["clip_range"].append(cfg.clip_range)
         history["ent_coef"].append(ent_now)
         history["transitions"].append(transitions_seen)
+        history["bc_loss"].append(last_bc)
         if verbose:
             print(
                 f"[ppo] upd={update + 1:04d}/{cfg.total_updates}  "
                 f"R={mean_r:8.2f}  pl={last_pl:7.4f}  vl={last_vl:7.4f}  "
-                f"ent={last_ent:6.3f}  kl={last_kl:6.4f}  lr={lr_now:.2e}  "
-                f"N={transitions_seen}"
+                f"ent={last_ent:6.3f}  kl={last_kl:6.4f}  bc={last_bc:6.3f}  "
+                f"lr={lr_now:.2e}  N={transitions_seen}"
             )
     return history
