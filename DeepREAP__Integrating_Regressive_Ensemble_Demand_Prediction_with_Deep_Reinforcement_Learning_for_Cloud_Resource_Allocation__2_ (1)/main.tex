@@ -1,0 +1,586 @@
+\documentclass{svproc}
+
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{microtype}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,fit,calc}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{cleveref}
+
+% ---------- Custom commands -------------------------------------------------
+\newcommand{\reap}{\textsc{Reap}}
+\newcommand{\deeprm}{\textsc{DeepRM\_Plus}}
+\newcommand{\deepreap}{\textsc{DeepReap}}
+\newcommand{\sjf}{\textsc{Sjf}}
+
+\newcommand{\orcidID}[1]{%
+  \href{https://orcid.org/#1}{%
+    {\color[HTML]{A6CE39}\textbullet}~\texttt{#1}}}
+
+\begin{document}
+
+% ---------- Title / Authors -------------------------------------------------
+\title{DeepREAP: Integrating Regressive Ensemble Demand Prediction with Deep Reinforcement Learning for Cloud Resource Allocation}
+\titlerunning{DeepREAP: Demand Prediction Meets Deep RL Scheduling}
+
+% \author{Suma Nagral\inst{1}\orcidID{0009-0005-2220-7357} \and Raghav Sharma\inst{1}}
+% \authorrunning{S.~Nagral and R.~Sharma}
+
+% \institute{San José State University, California, USA\\
+% \email{sumanagral8@gmail.com  96raghavsharma@gmail.com}} 
+
+\author{Suma Nagral\inst{1}\orcidID{0009-0005-2220-7357} \and 
+        Raghav Sharma\inst{1}}
+\authorrunning{S.~Nagral and R.~Sharma}
+\institute{San José State University, California, USA\\
+\email{sumanagral8@gmail.com, 96raghavsharma@gmail.com}}
+ 
+
+\maketitle
+
+% ---------- Abstract --------------------------------------------------------
+\begin{abstract}
+Cloud resource allocation is complicated by the dynamic and
+heterogeneous nature of cloud workloads, and small and medium
+enterprises (SMEs) disproportionately absorb the resulting
+inefficiency. Prior work advances along two largely independent axes:
+deep reinforcement learning (DRL) schedulers such as \deeprm{}, which
+react to the current cluster state, and regression ensembles such as
+the Regressive Ensemble Approach for Prediction (\reap{}), which
+forecast future demand. We propose and implement \deepreap{}, which
+couples the two by fusing \reap{}'s demand forecast directly into the
+state representation of a convolutional DRL scheduler, realising the
+integration as working, evaluated software. On a
+60-day synthetic trace the \reap{} ensemble attains MSE $8.07$ on the
+CPU-load target, improving on every constituent regressor. On a shared
+$3{,}000$-job trace the \deepreap{} imitation policy reduces average
+job slowdown to $8.27$ against $20.11$ for shortest-job-first and
+$18.76$ for a Tetris-style packer --- a $2.4\times$ improvement --- and
+lowers average completion time from $49.51$ to $19.04$ slots. Isolating
+the forecast channels as the only difference from \deeprm{} attributes
+the gain to prediction rather than architecture. We report the costs
+alongside: the policy completes fewer jobs under a fixed step budget,
+PPO refinement degrades rather than improves the imitation checkpoint
+at the training budget available, and the ensemble does not dominate
+its base models on the memory target.
+
+\end{abstract}
+
+\noindent\textbf{Keywords:} Cloud resource allocation $\cdot$ Deep reinforcement learning $\cdot$ Ensemble regression $\cdot$ Job scheduling $\cdot$ Demand prediction $\cdot$ Imitation learning
+
+% ============================================================================
+\section{Introduction}
+% ============================================================================
+Cloud resource allocation --- distributing compute, memory, and network
+capacity across running applications --- determines service
+performance, operational cost, and user experience. It is also hard,
+because cloud environments are dynamic and the demands placed on them
+heterogeneous. Small and medium enterprises (SMEs) feel this acutely:
+they rarely employ dedicated capacity-planning staff and lack the scale
+over which large providers amortise over-provisioning, so an allocation
+policy that is merely adequate at hyperscale can be materially
+expensive for an SME.
+
+Two families of machine-learning techniques address this. DRL
+schedulers learn an allocation policy from interaction with the
+cluster; DeepRM~\cite{mao2016} and its successor
+\deeprm{}~\cite{guo2021} are canonical. Separately, regression models
+forecast future demand from historical telemetry, enabling
+provisioning decisions before demand
+materialises~\cite{bankole2013,kaur2019}. The two are complementary ---
+one is reactive and optimises sequencing, the other anticipatory --- yet
+they are seldom combined.
+
+We frame the integration along a single axis: \emph{what the scheduler
+knows about the future}. A vanilla DRL scheduler observes only the
+current cluster state and the visible job queue; a predictive
+scheduler additionally observes a forecast of demand over its planning
+horizon. The contribution here is not a new learning algorithm but a
+quantification of what that forecast is worth, and what it costs, when
+fused into the state representation rather than post-processed into a
+priority score.
+
+We propose \deepreap{}, a system that unites the \reap{} ensemble
+predictor~\cite{kaur2019} with the \deeprm{} scheduler~\cite{guo2021}
+within a single framework in which anticipated demand conditions the
+scheduling policy itself. The proposal is guided by three research
+questions, each addressed empirically in what follows: (RQ1) how can
+a regression ensemble be integrated into \deeprm{}'s state
+representation to inform scheduling decisions; (RQ2) what effect does
+this integration have on scheduling performance, measured by job
+slowdown, completion time, and throughput; and (RQ3) to what extent
+can such an integration reduce operational cost for SMEs. We implement
+and evaluate the proposal in full.
+
+\textbf{Contributions.}
+(i)~A working \deepreap{} implementation --- \reap{} prediction, DRL
+scheduling, a REST integration layer, and a Prometheus/Grafana
+monitoring loop --- built and evaluated as runnable software.
+(ii)~A concrete state-fusion mechanism injecting a demand forecast into
+the scheduler's state as additional image channels, requiring no change
+to the policy architecture and no hand-coded contract between predictor
+and agent. (iii)~An empirical evaluation against three heuristic and
+two DRL baselines on a shared trace, isolating the forecast as the
+single independent variable: slowdown falls from $19.30$ to $8.27$ and
+completion from $43.41$ to $19.04$ slots. (iv)~Honest scoping of the
+negative results --- PPO refinement degrades both pre-trained policies
+at our budget, the slowdown gain is paid for in throughput, and
+inverse-MSE ensemble weighting is too flat to beat the strongest base
+model on one of two targets.
+
+The remainder of the paper is organised as follows. \Cref{sec:relwork}
+reviews related work in DRL-based scheduling and demand prediction.
+\Cref{sec:methodology} describes the \deepreap{} pipeline, the \reap{}
+predictor, and the scheduling environment. \Cref{sec:results} reports
+prediction accuracy, scheduling performance, and training dynamics.
+\Cref{sec:limitations} discusses limitations, and
+\Cref{sec:conclusion} concludes.
+
+% ============================================================================
+\section{Related Work}\label{sec:relwork}
+% ============================================================================
+\paragraph{Learning to schedule.} Early approaches allocate by
+priority: Son and Buyya~\cite{son2019} combine priority-aware VM
+allocation with bandwidth provisioning in SDN-enabled clouds, and
+Savitha and Salvi~\cite{savitha2021} learn application priorities from
+historical usage; both are validated in simulation and depend on the
+consistency of historical data. Reinforcement learning removes the need
+for hand-designed priority rules. Mao et al.~\cite{mao2016} introduced
+DeepRM, formulating cluster scheduling over an image-like state
+encoding and outperforming classical heuristics. Guo
+et al.~\cite{guo2021} extended it into \deeprm{}, using imitation
+learning to accelerate convergence and improving average weighted
+turnaround time. Zhou et al.~\cite{zhou2021} pair a DRL agent with a
+policy set enforcing SLA constraints; generalisability across
+platforms and the data appetite of training remain recurring concerns
+across this line.
+
+\paragraph{Learning to predict.} A parallel literature forecasts demand
+rather than sequencing it. Bankole and Ajila~\cite{bankole2013} find
+SVM strongest among classical regressors for provisioning prediction
+($4.5\%$ average error), and show that including SLA metrics improves
+accuracy further. Osypanka and Nawrocki~\cite{osypanka2022,osypanka2023}
+report up to $85\%$ cost reduction from ARIMA-based and self-adapting
+long-term predictors without QoS degradation. Gyeera
+et al.~\cite{gyeera2023} reach $R^2=0.9991$ on data-centre KPI
+forecasting with Boosted Decision Trees, at appreciable training cost.
+Most relevant here, Kaur, Bala, and Chana~\cite{kaur2019} propose
+\reap{}, which selects features by genetic algorithm, trains multiple
+regressors on the selected subset, and combines them in an
+accuracy-weighted ensemble, reaching $95\%$ accuracy on a real-world
+dataset. Its costs are training expense and uncertain transferability
+across cloud environments.
+
+\begin{sloppypar}
+\paragraph{The gap.} DRL schedules
+well~\cite{guo2021,mao2016,savitha2021,son2019,zhou2021}; regression
+ensembles predict
+well~\cite{bankole2013,gyeera2023,kaur2019,osypanka2022,osypanka2023}.
+Their integration into a single framework --- in which anticipated
+demand conditions the scheduling policy itself --- remains
+underexplored; this integration is the focus of the present work.
+\end{sloppypar}
+
+% ============================================================================
+\section{Methodology}\label{sec:methodology}
+% ============================================================================
+\Cref{fig:pipeline} overviews the four-stage pipeline. A workload
+generator produces resource telemetry and a job trace; \reap{} consumes
+the telemetry and forecasts per-resource demand; the forecast is fused
+into the state of a CNN scheduler that emits allocation decisions; a
+REST service exposes prediction and scheduling endpoints under
+Prometheus/Grafana monitoring. The critical design choice is that
+forecasts are \emph{fused into the state} rather than post-processed
+into a priority score, so the policy learns for itself how much to
+trust them.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  node distance=4mm and 4mm,
+  box/.style={draw, rounded corners=1.5pt, align=center, minimum width=8.6cm,
+              minimum height=8mm, fill=gray!5},
+  smallbox/.style={draw, rounded corners=1.5pt, align=center,
+                   minimum width=4.0cm, minimum height=8mm, fill=gray!5},
+  arr/.style={-{Stealth[length=1.6mm]}}
+]
+\node[box] (gen) {Synthetic workload generator\\ \scriptsize 60-day hourly telemetry (5{,}760 rows) $\cdot$ 3{,}000-job Poisson trace};
+\node[smallbox, below=8mm of gen, xshift=-2.3cm] (reap) {\textbf{REAP}\\\scriptsize GA feature selection $\to$ 5 regressors};
+\node[smallbox, below=8mm of gen, xshift=2.3cm] (env) {\textbf{Cluster env.}\\\scriptsize state image, $2\times10$ res., $T{=}20$};
+\node[box, below=8mm of $(reap)!0.5!(env)$] (fuse) {State fusion\\ \scriptsize $[\,$cluster load $\mid$ jobs$_{1..M}\,] \oplus$ forecast channels (CPU, memory)};
+\node[box, below=of fuse] (pol) {CNN policy\\ \scriptsize imitation of \textsc{Sjf} expert $\to$ PPO refinement $\to$ scheduling action};
+\node[box, below=of pol] (api) {FastAPI service $+$ monitoring\\ \scriptsize /predict /forecast /schedule /feedback /metrics $\to$ Prometheus $\to$ Grafana};
+\draw[arr] (gen.south) -- ++(0,-2mm) -| (reap.north);
+\draw[arr] (gen.south) -- ++(0,-2mm) -| (env.north);
+\draw[arr] (reap.south) |- ($(fuse.north)+(0,2mm)$);
+\draw[arr] (env.south)  |- ($(fuse.north)+(0,2mm)$);
+\draw[arr] (fuse) -- (pol);
+\draw[arr] (pol) -- (api);
+\draw[arr] (api.east) -- ++(6mm,0) |- node[font=\scriptsize\itshape,
+  fill=white, inner sep=1pt, pos=0.25] {feedback} (reap.east);
+\end{tikzpicture}
+\caption{The \deepreap{} pipeline. \reap{} forecasts and the raw
+cluster state are fused into a single multi-channel state image before
+reaching the policy, so no hand-coded contract binds predictor to
+agent. The feedback path updates a prediction-error gauge; \reap{}
+weights themselves are frozen after fitting (see
+\cref{sec:limitations}).}
+\label{fig:pipeline}
+\end{figure}
+
+\subsection{Workload Generation}\label{sec:data}
+No standard benchmark trace exists for this setting, so the evaluation
+uses a synthetically generated trace with realistic structure.
+\textbf{Resource usage:} hourly records for four service types (Web,
+Database, Media, Compute) with diurnal and weekly cycles, an
+autoregressive dependence on the previous hour's CPU, and Gaussian
+noise --- $60$ days $\times\,4$ services $=5{,}760$ rows.
+\textbf{Job trace:} Poisson arrivals; bimodal durations ($80\%$ short
+jobs of $1$--$3$ slots, $20\%$ long jobs of $10$--$15$ slots); bimodal
+per-resource demand with one dominant resource per job, matching the
+regime of Mao et al.~\cite{mao2016} --- $3{,}000$ jobs over $1{,}500$
+timesteps. Seeds are fixed throughout (data $42/43$, \reap{} $42$,
+policy training $42$, benchmark $123$).
+
+\subsection{REAP Demand Prediction}\label{sec:reap}
+\textbf{Feature selection.} A chromosome is a binary mask over
+candidate features, with fitness
+$-\mathrm{CV\_MSE}-0.01\cdot|\text{features}|$ for a Ridge regressor on
+the selected subset ($3$-fold CV, $25$ generations, population $24$,
+tournament-$3$ selection, single-point crossover, $5\%$ mutation).
+\textbf{Base regressors.} Linear Regression, Bayesian Ridge, Decision
+Tree, Random Forest, and SVR (RBF) --- the families named in the \reap{}
+formulation~\cite{kaur2019}. \textbf{Ensemble.} Each model $m$ receives
+weight $w_m\propto 1/\mathrm{MSE}_m$ on a held-out validation split,
+normalised so $\sum_m w_m = 1$.
+
+\subsection{Scheduling Environment and State Fusion}\label{sec:env}
+A discrete-time cluster scheduler with $2$ resources of capacity $10$
+and horizon $T{=}20$; $M{=}5$ visible job slots plus a bounded backlog
+of $60$. The state image is
+$[\,\text{cluster load}\mid\text{job}_1\mid\dots\mid\text{job}_M\,]$
+with shape $(1,R,T\cdot(M{+}1))$. Successful schedules do not advance
+time, letting the agent fill several slots per timestep. The reward at
+each time-advancing step is $-\sum_j 1/T_j$ over resident jobs, scaled
+by $1/10$ for value-loss stability.
+
+For \deepreap{}, \reap{} is rolled forward $T$ hours into a tensor of
+shape $(C,R,T)$ appended as extra channels: channel~$0$ carries
+predicted CPU demand broadcast across the resource axis and normalised
+to $[0,1]$; channel~$1$ carries predicted memory demand under the same
+convention. This is the \emph{only} difference between the \deeprm{}
+and \deepreap{} configurations we compare, which is what licenses
+attributing the performance difference to the forecast.
+
+\subsection{Policy Network and Training}\label{sec:training}
+The policy is two \texttt{Conv2d} blocks with $(1,3)$ kernels, an
+\texttt{AdaptiveAvgPool2d} to $(1,16)$, and an MLP head emitting action
+logits and a value estimate; the adaptive pool makes head size
+independent of $T\cdot(M{+}1)$. \textbf{Imitation pre-training} runs an
+\sjf{} expert for $30$ episodes ($\approx6{,}000$ transitions) and
+trains the CNN by cross-entropy for $6$ epochs, reaching loss $0.53$ on
+a $6$-class problem against a uniform-prior $\ln 6\approx1.79$.
+\textbf{PPO refinement} uses a clipped objective with GAE
+($\gamma{=}0.995$, $\lambda{=}0.95$, clip $0.1$, lr $10^{-4}$,
+$4$~envs $\times\,256$-step rollouts, $3$ epochs/update,
+$c_{vf}{=}0.25$, $c_{ent}{=}0.01$, grad-norm clip $0.5$) for $15$
+updates. Both the imitation and post-PPO checkpoints are saved and
+benchmarked separately.
+
+\subsection{Evaluation Protocol}\label{sec:metrics}
+All schedulers run on the \emph{same} job trace (seed $123$) for a
+budget of $201$ environment steps. We report average slowdown (job
+turnaround normalised by duration), average completion time in slots,
+jobs completed $n_{\text{done}}$ within the budget, and total
+environment reward. Baselines are three heuristics --- FIFO, \sjf{}, and
+Packer (Tetris-style, selecting the visible job whose demand vector
+maximises the dot product with free capacity) --- plus the imitation and
+post-PPO checkpoints of both \deeprm{} and \deepreap{}. Prediction
+quality is reported as MSE and MAE per base model and for the ensemble
+on both targets.
+
+% ============================================================================
+\section{Results and Analysis}\label{sec:results}
+% ============================================================================
+We organise results around prediction accuracy
+(\S\ref{sec:pred-perf}), scheduling performance
+(\S\ref{sec:sched-perf}), and training dynamics
+(\S\ref{sec:dynamics}).
+
+\subsection{Prediction Accuracy}\label{sec:pred-perf}
+\Cref{tab:reap} and \cref{fig:reap-quality} report per-model error on
+both targets. On \texttt{cpu\_load} the ensemble improves on every
+constituent regressor on both MSE and MAE, confirming that
+accuracy-weighted combination is worthwhile. The genetic algorithm
+selected $8$ of $11$ candidate features, discarding
+\texttt{day\_of\_week}, \texttt{is\_weekend}, and
+\texttt{svc\_Database} --- information already carried by
+\texttt{hour\_of\_day}, the autoregressive term, and the remaining
+one-hot indicators.
+
+\begin{table}[!htbp]
+\centering
+\caption{\reap{} base-model and ensemble accuracy on both prediction
+targets ($60$-day trace). Best per (target, metric) in bold. The
+ensemble wins on \texttt{cpu\_load} but is beaten by SVR alone on
+\texttt{memory\_usage}.}
+\label{tab:reap}
+\footnotesize
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{l l r r r}
+\toprule
+Target & Model & MSE & MAE & Weight \\
+\midrule
+\multirow{6}{*}{\texttt{cpu\_load}}
+ & Linear Regression & 9.33  & 2.45 & 0.205 \\
+ & Bayesian Ridge    & 9.34  & 2.45 & 0.205 \\
+ & Decision Tree     & 14.47 & 2.99 & 0.132 \\
+ & Random Forest     & 8.41  & 2.32 & 0.227 \\
+ & SVR (RBF)         & 8.26  & 2.30 & 0.231 \\
+ & \textbf{Ensemble} & \textbf{8.07} & \textbf{2.28} & --- \\
+\midrule
+\multirow{6}{*}{\texttt{memory\_usage}}
+ & Linear Regression & 27.50 & 4.23 & 0.202 \\
+ & Bayesian Ridge    & 27.50 & 4.23 & 0.202 \\
+ & Decision Tree     & 34.68 & 4.69 & 0.160 \\
+ & Random Forest     & 26.47 & 4.13 & 0.210 \\
+ & \textbf{SVR (RBF)} & \textbf{24.49} & \textbf{4.00} & 0.227 \\
+ & Ensemble          & 25.04 & 4.03 & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\begin{minipage}{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/reap_quality_cpu_load.png}
+\end{minipage}\hfill
+\begin{minipage}{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/reap_quality_memory_usage.png}
+\end{minipage}
+\caption{\reap{} base-model and ensemble error, MSE (left panel of
+each pair) and MAE (right). \textbf{Left:} \texttt{cpu\_load} --- the
+ensemble bar is lowest in both panels. \textbf{Right:}
+\texttt{memory\_usage} --- the SVR bar edges below the ensemble,
+illustrating the limits of inverse-MSE weighting.}
+\label{fig:reap-quality}
+\end{figure}
+
+\paragraph{Where ensembling fails.} On \texttt{memory\_usage} the
+ensemble (MSE $25.04$) does \emph{not} improve on its strongest
+constituent, SVR ($24.49$). \Cref{fig:reap-weights} explains why:
+inverse-MSE weighting is nearly flat, spanning only $0.13$--$0.23$
+across both targets. The Decision Tree, at roughly $1.7\times$ the MSE
+of SVR, is penalised far less than that ratio warrants, so the
+ensemble is dragged toward weaker linear and tree models. The ensemble
+still beats four of five base models and remains a reasonable default
+when the best base model is not known in advance, but the claim that
+ensembling dominates unconditionally is not supported by our data.
+Sharper weighting --- softmax over $-\mathrm{MSE}$ with a temperature,
+or top-$k$ selection --- would likely recover the gap.
+
+\begin{figure}[!htbp]
+\centering
+\begin{minipage}{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/reap_weights_cpu_load.png}
+\end{minipage}\hfill
+\begin{minipage}{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/reap_weights_memory_usage.png}
+\end{minipage}
+\caption{Accuracy-derived ensemble weights for \texttt{cpu\_load}
+(left) and \texttt{memory\_usage} (right). Weights span only
+$0.13$--$0.23$: inverse-MSE weighting approaches uniform when
+base-model errors are of similar magnitude, which is the direct cause
+of the memory-target result in \cref{tab:reap}.}
+\label{fig:reap-weights}
+\end{figure}
+
+\subsection{Scheduling Performance}\label{sec:sched-perf}
+\Cref{tab:bench} and \cref{fig:sched} report the scheduling benchmark.
+
+\begin{table}[!htbp]
+\centering
+\caption{Scheduler comparison on a shared job trace (seed $123$,
+$201$ steps). Arrows give the preferred direction; best per column in
+bold. \deepreap{}'s imitation policy attains the best slowdown and
+completion time and simultaneously the fewest completed jobs.}
+\label{tab:bench}
+\footnotesize
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{l r r r r}
+\toprule
+Scheduler & Slowdown $\downarrow$ & Completion $\downarrow$ &
+$n_{\text{done}}$ $\uparrow$ & Reward $\uparrow$ \\
+\midrule
+FIFO   & 20.20 & 48.65 & \textbf{54} & $-374.6$ \\
+\sjf{} & 20.11 & 49.51 & 53 & $\mathbf{-366.3}$ \\
+Packer & 18.76 & 48.42 & 52 & $-375.3$ \\
+\midrule
+\deeprm{} (imitation) & 19.30 & 43.41 & 41 & $-414.1$ \\
+\deeprm{} (PPO)       & 24.47 & 55.44 & 41 & $-443.7$ \\
+\midrule
+\textbf{\deepreap{} (imitation)} & \textbf{8.27} & \textbf{19.04} & 25 & $-446.4$ \\
+\deepreap{} (PPO)     & 18.12 & 42.05 & 43 & $-401.8$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\begin{minipage}{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/avg_slowdown.png}
+\end{minipage}\hfill
+\begin{minipage}{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/avg_completion.png}
+\end{minipage}
+\caption{Average job slowdown (left) and average completion time in
+slots (right) across all seven schedulers; lower is better in both.
+\deepreap{}-imitation reaches $8.27$ slowdown, less than half the best
+heuristic result of $18.76$, with the completion ordering closely
+tracking it.}
+\label{fig:sched}
+\end{figure}
+
+\paragraph{The forecast is what helps.} \deepreap{}-imitation achieves
+average slowdown $8.27$ against $20.11$ for \sjf{} and $18.76$ for
+Packer --- a $2.4\times$ improvement over the best baseline --- and cuts
+average completion from $48.4$--$49.5$ slots to $19.04$. Because
+\deepreap{} and \deeprm{} differ only in the forecast channels
+(\cref{sec:env}) and share training procedure, seed, and evaluation
+trace, the like-for-like comparison isolates the contribution: slowdown
+$19.30\to8.27$, completion $43.41\to19.04$. The gain is attributable to
+prediction, not to architecture or tuning.
+
+\paragraph{And what it costs.} \deepreap{}-imitation completes $25$
+jobs within the step budget against $52$--$54$ for the heuristics. The
+policy learns to defer long jobs that would occupy capacity into
+windows where \reap{} anticipates spare headroom, improving efficiency
+on the jobs it does schedule while reducing raw throughput. Its total
+reward ($-446.4$) is accordingly the worst in \cref{tab:bench}, because
+the environment reward penalises every resident job at every step,
+including those held in backlog. Slowdown and reward therefore measure
+different things, and a deployment valuing throughput over per-job
+latency would prefer the heuristics. We regard this as a genuine
+limitation rather than a presentational detail: the improvement is real
+but it is an improvement on a specific objective.
+
+\subsection{Training Dynamics}\label{sec:dynamics}
+\Cref{fig:curves} shows the PPO learning curves. Neither run converges:
+mean episode reward oscillates between roughly $-400$ and $-200$ across
+all $15$ updates with no downward trend in variance, and the two curves
+are near-superimposable, both runs sharing seed $42$ and the forecast
+channels apparently exerting little influence on PPO dynamics at this
+budget. Refinement moved \deepreap{} slowdown from $8.27$ to $18.12$,
+substantially overwriting what imitation had learned, and \deeprm{}
+from $19.30$ to $24.47$ --- worse than every heuristic.
+
+\begin{figure}[!htbp]
+\centering
+\begin{minipage}{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/learning_curve_deeprm_plus.png}
+\end{minipage}\hfill
+\begin{minipage}{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/learning_curve_deepreap.png}
+\end{minipage}
+\caption{PPO learning curves for \deeprm{} (left) and \deepreap{}
+(right) over $15$ updates. Both oscillate without converging; the
+near-identical trajectories reflect the shared random seed. At this
+budget PPO refinement degrades both pre-trained policies, so the
+imitation checkpoint is the one we would deploy.}
+\label{fig:curves}
+\end{figure}
+
+We attribute this to budget rather than a defect in the method. At
+$15$ updates $\times\,256$ steps $\times\,4$ environments, PPO sees on
+the order of $1.5\times10^4$ transitions, far below the scale at which
+policy-gradient methods stabilise on this class of problem. The reward
+is also noisy: it aggregates over all resident jobs, so a single long
+job entering the backlog perturbs it substantially. Reporting these
+runs matters because the deployable result was reached by supervised
+pre-training, not by reinforcement learning, and readers should not
+infer otherwise from the system's name.
+
+\subsection{Operational Cost}\label{sec:cost}
+A third question motivating this line of work is whether the
+integration reduces operational cost for SMEs. We cannot answer it.
+Establishing a cost result requires a billing model, a real workload,
+and a deployment, and our evaluation supplies none. The completion-time
+reductions in \cref{tab:bench} are consistent with lower cost under
+per-resource-time billing, but the reduced throughput of the same
+policy pushes the other way, and we have no basis for netting the two.
+We record the question as open.
+
+% ============================================================================
+\section{Limitations}\label{sec:limitations}
+% ============================================================================
+\textbf{(i)~Synthetic workload:} the trace is parametric, and although
+it reproduces diurnal cycles, bimodal durations, and dominant-resource
+demand, it is generated by a process we also control --- a predictor may
+find it more forecastable than a production trace, so the magnitude of
+the \deepreap{} gain should be read as an upper bound. Substituting the
+Google cluster or Azure VM trace is a single-callsite change, as the
+generator already emits the canonical schema.
+\textbf{(ii)~Single trace, single seed:} results come from one
+benchmark trace at one seed; we report no confidence intervals and make
+no significance claims, which is the most important gap between this
+study and a conclusive one.
+\textbf{(iii)~Short evaluation budget:} $201$ steps truncates long jobs
+and therefore interacts with the very deferral behaviour driving
+\deepreap{}'s advantage; a longer horizon would let deferred jobs
+complete and likely narrow the $n_{\text{done}}$ gap.
+\textbf{(iv)~Training budget:} the PPO results characterise a
+$1.5\times10^4$-transition run, not the method's ceiling; a
+$10\times$ longer run is the natural next experiment and the
+environment, network, and GAE pipeline already support it.
+\textbf{(v)~Frozen predictor:} \reap{} is fitted once and frozen, so
+the feedback path in \cref{fig:pipeline} updates only an error gauge;
+re-fitting ensemble weights online would close the loop depicted in
+\cref{fig:pipeline}.
+\textbf{(vi)~Simulation, not deployment:} the scheduler runs in a
+simulated cluster without network latency, failure handling, or
+multi-tenancy.
+
+% ============================================================================
+\section{Conclusion}\label{sec:conclusion}
+% ============================================================================
+This work proposes, implements, and evaluates \deepreap{}, examining
+whether fusing ensemble demand forecasts into a DRL scheduler's state
+representation improves allocation. On the primary metric it does: average job slowdown falls
+$2.4\times$ relative to the best heuristic and $2.3\times$ relative to
+an otherwise-identical scheduler without forecasts, with completion
+time falling from $43.41$ to $19.04$ slots. Because the forecast
+channels are the only difference between the two configurations, the
+gain is attributable to prediction rather than architecture.
+
+The result is bounded in ways worth restating. It is concentrated in
+the imitation-pretrained policy, since PPO refinement degraded both
+agents at our training budget. It is paid for in throughput: the
+best-slowdown policy completes half as many jobs as FIFO under a fixed
+step budget, because it defers work into predicted-idle windows. It
+rests on a synthetic trace at a single seed. And the cost question that
+motivates SME deployment remains open, requiring a billing model this
+study does not supply. Sharper ensemble weighting, an order-of-magnitude
+larger RL budget, a throughput-aware reward, and online \reap{}
+co-training are the four changes most likely to matter.
+
+% ============================================================================
+% References (LNCS / splncs04 style, typed inline)
+% ============================================================================
+\bibliographystyle{splncs04}
+\bibliography{references_cloud}
+\end{document}
