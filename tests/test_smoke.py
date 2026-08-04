@@ -217,3 +217,88 @@ def test_multiseed_summary_ci_and_pvalue():
     assert summary["metrics"]["deepreap"]["avg_slowdown"]["ci95_halfwidth"] > 0
     assert "deepreap" in summary["significance"]
     assert 0.0 <= summary["significance"]["deepreap"]["p_value"] <= 1.0
+    assert "wilcoxon" in summary["significance"]["deepreap"]
+    assert "ttest_rel" in summary["significance"]["deepreap"]
+
+
+def test_drf_and_ilp_baselines():
+    cfg = ClusterConfig(time_horizon=10, n_visible=3, episode_max_steps=60)
+    jobs = generate_job_trace(n_jobs=60, horizon=60, seed=5)
+    for name in ("drf", "ilp"):
+        env = ClusterEnv(cfg=cfg, job_trace=jobs, seed=5)
+        m = run_baseline(env, name, max_steps=150)
+        assert m["steps"] > 0
+        assert "p95_slowdown" in m
+        assert "fragmentation" in m
+        assert "sla_breach_rate" in m
+
+
+def test_expanded_env_metrics():
+    cfg = ClusterConfig(time_horizon=10, n_visible=3, episode_max_steps=80, sla_max_wait=5)
+    jobs = generate_job_trace(n_jobs=80, horizon=80, seed=3)
+    env = ClusterEnv(cfg=cfg, job_trace=jobs, seed=3)
+    m = run_baseline(env, "sjf", max_steps=200)
+    for key in ("p95_slowdown", "p99_slowdown", "p95_wait", "p99_wait",
+                "fragmentation", "sla_breach_rate", "throughput"):
+        assert key in m
+
+
+def test_oracle_forecast_and_noise():
+    from src.deeprm.forecasts import (
+        build_offline_utilization,
+        inject_forecast_noise,
+        oracle_forecast_at,
+        attach_forecast_callback,
+    )
+    jobs = generate_job_trace(n_jobs=40, horizon=40, seed=2)
+    cfg = ClusterConfig(time_horizon=8, n_visible=3, reap_channels=2, episode_max_steps=40)
+    util = build_offline_utilization(jobs, cfg)
+    assert util.shape[0] == cfg.n_resources
+    fc = oracle_forecast_at(util, t=0, cfg=cfg, channels=2)
+    assert fc.shape == (2, cfg.n_resources, cfg.time_horizon)
+    noisy = inject_forecast_noise(fc, 0.2, rng=np.random.default_rng(0))
+    assert noisy.shape == fc.shape
+    assert not np.allclose(noisy, fc)
+
+    env = ClusterEnv(cfg=cfg, job_trace=jobs, seed=0)
+    attach_forecast_callback(env, mode="oracle", util_timeline=util, noise_pct=0.1, seed=0)
+    env.reset()
+    assert env.reap_forecast.shape == (2, cfg.n_resources, cfg.time_horizon)
+
+
+def test_production_traces_and_latency():
+    from data.production_traces import (
+        generate_alibaba_like_trace,
+        generate_google_like_trace,
+    )
+    from src.evaluation.ablation import latency_microbenchmark
+
+    g = generate_google_like_trace(n_jobs=100, horizon=200, seed=1)
+    a = generate_alibaba_like_trace(n_jobs=100, horizon=200, seed=2)
+    assert len(g) > 0 and len(a) > 0
+    assert {"job_id", "arrival_time", "duration", "res_0", "res_1"} <= set(g.columns)
+
+    lat = latency_microbenchmark(
+        __import__("pathlib").Path("models/deeprm/deepreap.pt"),
+        n_iters=30,
+        warmup=5,
+    )
+    assert "total" in lat
+    assert lat["total"]["mean_ms"] >= 0.0
+
+
+def test_reap_timeseries_split_no_shuffle():
+    df = generate_resource_usage(n_hours=24 * 5)
+    feats = ["hour_of_day", "day_of_week", "active_users", "previous_hour_cpu"]
+    X = df[feats].to_numpy(dtype=float)
+    y = df["cpu_load"].to_numpy(dtype=float)
+    model = train_reap(
+        X, y, feats, "cpu_load",
+        ga_cfg=GAConfig(pop_size=6, n_generations=2, seed=0),
+        ensemble_cfg=EnsembleConfig(
+            scheme="softmax", temperature=1.5, use_timeseries_cv=True, n_splits=3
+        ),
+        verbose=False,
+    )
+    assert model.metrics["ENSEMBLE"].get("timeseries_cv") is True
+    assert "cv_mse" in model.metrics[model.models[0].name]

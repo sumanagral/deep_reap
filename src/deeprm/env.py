@@ -45,6 +45,9 @@ class ClusterConfig:
     reward_backlog_coef: float = 0.05     # β: per backlog job
     reward_wait_coef: float = 0.01        # γ: age-weighted wait of queued jobs
     reward_slowdown_scale: float = 10.0   # divisor for Σ 1/T_j term
+    reward_frag_coef: float = 0.02        # δ: multi-resource fragmentation penalty
+    # SLA: max allowable waiting time (arrival → start); jobs above count as breach
+    sla_max_wait: int = 30
 
 
 @dataclass
@@ -100,6 +103,7 @@ class ClusterEnv:
         self._next_job_id = 0
         self._steps = 0
         self._n_finished_prev = 0
+        self._frag_samples: list[float] = []
         self.reap_forecast = np.zeros(
             (c.reap_channels, c.n_resources, c.time_horizon), dtype=np.float32
         )
@@ -194,6 +198,21 @@ class ClusterEnv:
         self.in_progress = still
         # spawn new arrivals
         self._spawn_arrivals()
+        self._frag_samples.append(self._fragmentation())
+
+    def _fragmentation(self) -> float:
+        """
+        Multi-dimensional fragmentation in [0, 1]: capacity left on each
+        resource at the current slot that cannot host the average queued
+        demand (waste due to imbalance across CPU vs memory).
+        """
+        c = self.cfg
+        free = (c.res_capacity - self.cluster_load[:, 0]).astype(np.float32)
+        util = self.cluster_load[:, 0] / max(c.res_capacity, 1)
+        # imbalance across resources + unused capacity fraction
+        imbalance = float(np.std(util)) if c.n_resources > 1 else 0.0
+        unused = float(np.mean(free) / max(c.res_capacity, 1))
+        return float(np.clip(0.5 * imbalance + 0.5 * unused * imbalance, 0.0, 1.0))
 
     def _reward(self) -> float:
         """
@@ -202,6 +221,7 @@ class ClusterEnv:
               + α · (# jobs completed this step)
               - β · |backlog|
               - γ · mean wait of queued (visible + backlog) jobs
+              - δ · fragmentation
         This prevents the agent from hoarding long jobs indefinitely to
         optimize slowdown at the expense of throughput.
         """
@@ -234,7 +254,8 @@ class ClusterEnv:
             # age-weighted: longer waits penalize more (encourages draining starved jobs)
             wait_term = -c.reward_wait_coef * float(np.mean(waits) / max(c.max_job_len, 1))
 
-        return slowdown_term + throughput_term + backlog_term + wait_term
+        frag_term = -c.reward_frag_coef * self._fragmentation()
+        return slowdown_term + throughput_term + backlog_term + wait_term + frag_term
 
     # ---------------------------------------------------------------- arrivals
     def _spawn_arrivals(self, initial: bool = False) -> None:
@@ -322,34 +343,52 @@ class ClusterEnv:
         self.reap_forecast = forecast.astype(np.float32)
 
     def metrics(self) -> dict:
+        n_remaining = (
+            len(self.in_progress)
+            + len(self.backlog)
+            + sum(1 for s in self.visible if s is not None)
+        )
+        frag = float(np.mean(self._frag_samples)) if self._frag_samples else 0.0
         if not self.finished:
             return {
                 "avg_slowdown": 0.0,
                 "avg_completion": 0.0,
+                "p95_slowdown": 0.0,
+                "p99_slowdown": 0.0,
+                "p95_wait": 0.0,
+                "p99_wait": 0.0,
+                "avg_wait": 0.0,
                 "n_done": 0,
                 "throughput": 0.0,
-                "n_remaining": (
-                    len(self.in_progress)
-                    + len(self.backlog)
-                    + sum(1 for s in self.visible if s is not None)
-                ),
+                "fragmentation": frag,
+                "sla_breach_rate": 0.0,
+                "n_remaining": n_remaining,
             }
         slow = []
         comp = []
+        waits = []
+        breaches = 0
         for j in self.finished:
+            wait = max(j.started_time - j.arrival_time, 0)
             comp_time = j.finished_time - j.arrival_time
             slowdown = comp_time / max(j.duration, 1)
             slow.append(slowdown)
             comp.append(comp_time)
+            waits.append(float(wait))
+            if wait > self.cfg.sla_max_wait:
+                breaches += 1
         n_done = len(self.finished)
         return {
             "avg_slowdown": float(np.mean(slow)),
             "avg_completion": float(np.mean(comp)),
+            "p95_slowdown": float(np.percentile(slow, 95)),
+            "p99_slowdown": float(np.percentile(slow, 99)),
+            "p95_wait": float(np.percentile(waits, 95)),
+            "p99_wait": float(np.percentile(waits, 99)),
+            "avg_wait": float(np.mean(waits)),
             "n_done": n_done,
             "throughput": float(n_done) / max(self.t, 1),
-            "n_remaining": (
-                len(self.in_progress)
-                + len(self.backlog)
-                + sum(1 for s in self.visible if s is not None)
-            ),
+            "fragmentation": frag,
+            "sla_breach_rate": float(breaches) / max(n_done, 1),
+            "n_remaining": n_remaining,
         }

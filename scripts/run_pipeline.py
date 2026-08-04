@@ -57,6 +57,9 @@ def main() -> None:
 
     if not args.skip_data:
         _run([py, "-m", "data.synthetic_generator"])
+        _run([py, "-m", "data.production_traces",
+              "--jobs", "1500" if args.quick else "4000",
+              "--horizon", "1200" if args.quick else "2000"])
 
     if not args.skip_reap:
         for target in ("cpu_load", "memory_usage"):
@@ -88,6 +91,14 @@ def main() -> None:
             "--n-seeds", args.n_seeds,
             "--max-steps", args.max_steps,
         ])
+        abl = [
+            py, "-m", "src.evaluation.ablation",
+            "--n-seeds", args.n_seeds,
+            "--max-steps", args.max_steps,
+        ]
+        if args.quick:
+            abl += ["--episode-max-steps", "200"]
+        _run(abl)
 
     print("\n[pipeline] done. See results/ and models/ for artifacts.")
 

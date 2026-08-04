@@ -70,7 +70,9 @@ Pipeline:
 3. **Sharper ensemble** (`ensemble.py`) — default Softmax(−MSE/τ)
    weighting (temperature τ, default 2.0) so near-tied base models are
    no longer nearly uniform; alternatives include Top-K selection and
-   a Ridge stacking meta-learner. Online re-weighting via
+   a Ridge stacking meta-learner. Training uses a **temporal holdout**
+   (last 20%) plus **TimeSeriesSplit** rolling-window CV for weights —
+   never a shuffled random split. Online re-weighting via
    `REAPModel.update_online_weights` (and the `/feedback` API) EMA-blends
    fresh Softmax weights as cluster observations arrive.
 
@@ -260,22 +262,79 @@ python -m scripts.run_api                             # → :8000
 Data/REAP/DeepRM training seeds remain fixed (42); the benchmark
 sweeps `seed, seed+1, …, seed+n-1` (default base 123, n=10).
 
-## 11. Limitations & next steps
+## 11. Problem formulation (POMDP)
 
-- **PPO at full scale.** Defaults now target ~4×10⁵ transitions; for
-  production-grade policy gradient variance reduction, push toward
-  10⁶ with `--ppo-updates 1000` on a GPU box.
-- **Industry traces.** Loaders for Google / Alibaba / Azure dumps ship
-  in `data/trace_loaders.py`; full multi-day Borg / Alibaba traces
-  still need to be downloaded separately (licenses / size).
-- **REAP + RL co-training.** Online ensemble re-weighting is live via
-  `/feedback`; jointly fine-tuning base regressors (not just weights)
-  remains future work.
-- **Multi-region / multi-cluster.** The env has a single cluster.
-  Sharded clusters with cross-shard migration would be the obvious
-  generalization for an SME-cloud setting.
+We cast online multi-resource cluster scheduling as a continuous-time
+*Partially Observable* Markov Decision Process
+$\mathcal{M} = (\mathcal{S}, \mathcal{A}, P, R, \Omega, O, \gamma)$:
 
-## 12. References
+| Symbol | Meaning in DeepREAP |
+|--------|---------------------|
+| $s_t \in \mathcal{S}$ | True cluster state: per-resource load timeline, all queued / running / finished jobs, wall-clock $t$ |
+| $o_t \in \Omega$ | Observation image $(C, R, T\cdot(M+1))$ — cluster load \| $M$ visible job slots \| optional REAP forecast channels. Backlog beyond $M$ is only summarized indirectly (partial observability) |
+| $a_t \in \mathcal{A}$ | Discrete: schedule visible slot $j\in\{0..M-1\}$ or no-op ($M$) that advances time |
+| $P(s_{t+1}\mid s_t,a_t)$ | Deterministic packing dynamics + stochastic / trace-driven arrivals |
+| $O(o_t\mid s_t)$ | Projection of $s_t$ onto the fixed-size image (truncates backlog, hides future arrivals except via forecast channels) |
+| $R(s_t,a_t)$ | Multi-objective: $-\sum_j 1/T_j + \alpha\Delta N_{\mathrm{done}} - \beta\|\mathrm{backlog}\| - \gamma\,\overline{\mathrm{wait}} - \delta\,\mathrm{frag}$ |
+| $\gamma$ | Discount (PPO uses $\gamma=0.995$) |
+
+The REAP ensemble approximates the latent future-demand component of
+$s_t$ that is otherwise invisible under $O$, turning a harder POMDP
+into a better-informed MDP approximation for the CNN policy.
+
+## 12. Publishability experiments
+
+| Study | Entry point | Artifact |
+|-------|-------------|----------|
+| Multi-seed bench + DRF/ILP + P95/P99/frag/SLA | `python -m src.evaluation.benchmark --n-seeds 5` | `results/benchmark_summary.json` |
+| Oracle vs proxy vs no-forecast | `python -m src.evaluation.ablation` | `results/ablation/oracle_gap.json` |
+| Forecast noise ±5/10/20/50% | (same) | `results/ablation/noise_sensitivity.json` |
+| Zero-shot Google/Alibaba-like | (same) | `results/ablation/zero_shot_transfer.json` |
+| Decision latency microbench | (same) | `results/ablation/latency.json` |
+| Production-style traces | `python -m data.production_traces` | `data/google_like_*.csv`, `data/alibaba_like_*.csv` |
+
+REAP training uses a **temporal holdout** (last 20% of rows) plus
+**TimeSeriesSplit** rolling-window CV for ensemble weights — random
+shuffle splits are disabled to prevent temporal leakage.
+
+## 13. Limitations & threats to validity
+
+**Internal validity**
+- PPO variance remains non-trivial at $10^5$–$10^6$ transitions; we
+  report mean±std over $N\ge5$ seeds and paired Wilcoxon / $t$-tests,
+  but camera-ready claims should target $N\ge10$ and $p<0.01$.
+- The short-horizon ILP baseline is an *online one-step* CBC solve,
+  not a full-episode offline optimum (Gurobi MIP over the whole trace
+  would be a stronger — and much slower — upper bound).
+- Oracle utilization is built by greedy earliest-fit packing of the
+  trace; a different offline scheduler would yield a different oracle.
+
+**External validity**
+- Vendored Google/Alibaba artifacts are *distribution-matched
+  stylized traces* (`data/production_traces.py`) plus loaders for real
+  dumps. Reviewers should be shown at least one run on an official
+  public sample (Borg 2019 / Alibaba 2018) downloaded at evaluation
+  time — full multi-GB dumps are not shipped in-repo.
+- Zero-shot transfer tests generalization across arrival/duration
+  distributions, but not across cluster *sizes* or heterogeneous
+  machine pools.
+
+**Construct validity**
+- Slowdown, throughput, fragmentation, and SLA-breach are reported;
+  energy / carbon and multi-tenant fairness beyond DRF are out of
+  scope.
+- Latency microbench measures feature build + forecast slice + CNN
+  forward on CPU; production serving (batching, GPU, gRPC) may differ.
+
+**Next steps toward a top-tier submission**
+- Run the ablation suite on an official Google/Alibaba sample and
+  quote the ≥80% Oracle-gap result with $N\ge10$.
+- Scale PPO to $10^6$ transitions; publish learning curves with
+  shaded std.
+- Add an offline MIP upper bound over short windows (Gurobi/CBC).
+- Multi-cluster / migration POMDP extension.
+
+## 14. References
 
 1. W. Guo *et al.*, "Cloud Resource Scheduling With Deep Reinforcement
    Learning and Imitation Learning," *IEEE IoT J.* 8(5), 2021.

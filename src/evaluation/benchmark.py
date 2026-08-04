@@ -32,15 +32,26 @@ from src.deeprm.network import CNNPolicy
 
 
 # ---------- scheduler runners ---------------------------------------
-def run_policy(env: ClusterEnv, policy: CNNPolicy, max_steps: int = 5000) -> dict:
+def run_policy(
+    env: ClusterEnv,
+    policy: CNNPolicy,
+    max_steps: int = 5000,
+    profile_latency: bool = False,
+) -> dict:
+    import time
+
     s = env.reset()
     total = 0.0
     steps = 0
+    latencies: list[float] = []
     policy.eval()
     while steps < max_steps:
         x = torch.from_numpy(s[None]).float()
+        t0 = time.perf_counter()
         with torch.no_grad():
             logits, _ = policy(x)
+        if profile_latency:
+            latencies.append(time.perf_counter() - t0)
         a = int(torch.argmax(logits, dim=-1).item())
         s, r, done, _ = env.step(a)
         total += r
@@ -50,6 +61,11 @@ def run_policy(env: ClusterEnv, policy: CNNPolicy, max_steps: int = 5000) -> dic
     m = env.metrics()
     m["total_reward"] = total
     m["steps"] = steps
+    if latencies:
+        arr = np.asarray(latencies)
+        m["cnn_latency_mean_ms"] = float(arr.mean() * 1000)
+        m["cnn_latency_p95_ms"] = float(np.percentile(arr, 95) * 1000)
+        m["cnn_latency_p99_ms"] = float(np.percentile(arr, 99) * 1000)
     return m
 
 
@@ -99,27 +115,44 @@ def _ci(values: list[float], alpha: float = 0.05) -> tuple[float, float, float]:
     return mean, std, tcrit * se
 
 
+METRIC_KEYS = [
+    "avg_slowdown", "avg_completion", "p95_slowdown", "p99_slowdown",
+    "avg_wait", "p95_wait", "p99_wait",
+    "n_done", "throughput", "fragmentation", "sla_breach_rate", "total_reward",
+    "cnn_latency_mean_ms", "cnn_latency_p95_ms",
+]
+
+
 def summarize_results(
     per_seed: dict[str, list[dict]],
     baseline_for_test: str = "sjf",
     metric: str = "avg_slowdown",
 ) -> dict:
     """
-    Aggregate multi-seed runs into mean/std/CI and Wilcoxon p-values
-    vs a non-predictive baseline (default SJF).
+    Aggregate multi-seed runs into mean ± std / 95% CI and paired
+    Wilcoxon + t-test p-values vs a non-predictive baseline (default SJF).
     """
     summary: dict = {"n_seeds": {}, "metrics": {}, "significance": {}}
-    # collect metric arrays
-    metric_keys = ["avg_slowdown", "avg_completion", "n_done", "throughput", "total_reward"]
     for sched, runs in per_seed.items():
         summary["n_seeds"][sched] = len(runs)
         summary["metrics"][sched] = {}
-        for key in metric_keys:
-            vals = [float(r.get(key, 0.0)) for r in runs]
+        # discover keys present in runs
+        keys = list(METRIC_KEYS)
+        for r in runs:
+            for k in r:
+                if k not in keys and isinstance(r[k], (int, float)):
+                    keys.append(k)
+        for key in keys:
+            if key == "seed":
+                continue
+            vals = [float(r[key]) for r in runs if key in r]
+            if not vals:
+                continue
             mean, std, half = _ci(vals)
             summary["metrics"][sched][key] = {
                 "mean": mean,
                 "std": std,
+                "mean_pm_std": f"{mean:.4f} ± {std:.4f}",
                 "ci95_halfwidth": half,
                 "ci95": [mean - half, mean + half],
                 "values": vals,
@@ -134,21 +167,39 @@ def summarize_results(
             n = min(len(vals), len(base_vals))
             if n < 2:
                 continue
-            # Wilcoxon signed-rank (paired across seeds); fall back to t-test
-            try:
-                stat, p = stats.wilcoxon(vals[:n], base_vals[:n], alternative="two-sided")
-                test = "wilcoxon"
-            except ValueError:
-                stat, p = stats.ttest_rel(vals[:n], base_vals[:n])
-                test = "ttest_rel"
-            summary["significance"][sched] = {
+            entry: dict = {
                 "vs": baseline_for_test,
                 "metric": metric,
-                "test": test,
-                "statistic": float(stat),
-                "p_value": float(p),
                 "n": n,
             }
+            a = np.asarray(vals[:n], dtype=float)
+            b = np.asarray(base_vals[:n], dtype=float)
+            if np.allclose(a, b):
+                entry["wilcoxon"] = {"statistic": 0.0, "p_value": 1.0}
+                entry["ttest_rel"] = {"statistic": 0.0, "p_value": 1.0}
+            else:
+                try:
+                    w_stat, w_p = stats.wilcoxon(a, b, alternative="two-sided")
+                    entry["wilcoxon"] = {
+                        "statistic": float(w_stat),
+                        "p_value": float(w_p) if np.isfinite(w_p) else None,
+                    }
+                except ValueError:
+                    entry["wilcoxon"] = {"statistic": None, "p_value": None}
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    t_stat, t_p = stats.ttest_rel(a, b)
+                entry["ttest_rel"] = {
+                    "statistic": float(t_stat) if np.isfinite(t_stat) else None,
+                    "p_value": float(t_p) if np.isfinite(t_p) else None,
+                }
+            # primary p-value: Wilcoxon if available else t-test
+            primary = entry["wilcoxon"]["p_value"]
+            if primary is None:
+                primary = entry["ttest_rel"]["p_value"]
+            entry["p_value"] = primary
+            entry["significant_at_0.01"] = bool(primary is not None and primary < 0.01)
+            entry["significant_at_0.05"] = bool(primary is not None and primary < 0.05)
+            summary["significance"][sched] = entry
     return summary
 
 
@@ -159,7 +210,13 @@ def plot_bars(summary: dict, out_dir: Path) -> None:
     if not metrics_block:
         return
     schedulers = list(metrics_block.keys())
-    for metric in ["avg_slowdown", "avg_completion", "n_done", "throughput"]:
+    for metric in [
+        "avg_slowdown", "p95_slowdown", "p99_slowdown",
+        "avg_completion", "n_done", "throughput",
+        "fragmentation", "sla_breach_rate",
+    ]:
+        if not all(metric in metrics_block[s] for s in schedulers):
+            continue
         means = [metrics_block[s][metric]["mean"] for s in schedulers]
         errs = [metrics_block[s][metric]["ci95_halfwidth"] for s in schedulers]
         plt.figure(figsize=(9, 4.5))
@@ -261,20 +318,28 @@ def run_benchmark(
     deeprm_path: str,
     deepreap_path: str,
     trace_source: str = "canonical",
+    include_ilp: bool = True,
 ) -> tuple[dict, dict]:
     """Run all schedulers across seeds; return (per_seed_raw, summary)."""
     per_seed: dict[str, list[dict]] = {}
+    heuristics = ["fifo", "sjf", "packer", "drf"]
+    if include_ilp:
+        heuristics.append("ilp")
 
     for seed in seeds:
         trace = _load_trace(job_trace, trace_source, seed=seed)
         print(f"[bench] seed={seed}  trace_rows={0 if trace is None else len(trace)}")
 
-        for name in ["fifo", "sjf", "packer"]:
+        for name in heuristics:
             env = _make_env(trace, reap_channels=0, seed=seed, episode_max_steps=episode_max_steps)
             m = run_baseline(env, name, max_steps=max_steps)
             m["seed"] = seed
             per_seed.setdefault(name, []).append(m)
-            print(f"[bench]   {name:12s}  {m}")
+            print(
+                f"[bench]   {name:12s}  slow={m.get('avg_slowdown', 0):.2f}  "
+                f"p95={m.get('p95_slowdown', 0):.2f}  n_done={m.get('n_done', 0)}  "
+                f"frag={m.get('fragmentation', 0):.3f}  sla={m.get('sla_breach_rate', 0):.3f}"
+            )
 
         for label, ckpt_path, reap_ch in [
             ("deeprm_plus_imitation", "models/deeprm/deeprm_plus_imitation.pt", 0),
@@ -292,10 +357,14 @@ def run_benchmark(
                 episode_max_steps=episode_max_steps,
             )
             policy, _ = _load_policy(p)
-            m = run_policy(env, policy, max_steps=max_steps)
+            m = run_policy(env, policy, max_steps=max_steps, profile_latency=True)
             m["seed"] = seed
             per_seed.setdefault(label, []).append(m)
-            print(f"[bench]   {label:24s}  {m}")
+            print(
+                f"[bench]   {label:24s}  slow={m.get('avg_slowdown', 0):.2f}  "
+                f"p95={m.get('p95_slowdown', 0):.2f}  n_done={m.get('n_done', 0)}  "
+                f"lat_ms={m.get('cnn_latency_mean_ms', 0):.3f}"
+            )
 
     summary = summarize_results(per_seed, baseline_for_test="sjf", metric="avg_slowdown")
     return per_seed, summary
@@ -313,8 +382,8 @@ def main() -> None:
     ap.add_argument("--results", default="results")
     ap.add_argument("--seed", type=int, default=123, help="base seed (used if --n-seeds=1)")
     ap.add_argument(
-        "--n-seeds", type=int, default=10,
-        help="number of evaluation seeds (n≥10 for statistical confidence)",
+        "--n-seeds", type=int, default=5,
+        help="number of evaluation seeds (n>=5; use 10+ for camera-ready)",
     )
     ap.add_argument(
         "--seeds", type=str, default="",
@@ -323,6 +392,7 @@ def main() -> None:
     ap.add_argument("--max-steps", type=int, default=8000,
                     help="evaluation step budget (longer = fairer throughput)")
     ap.add_argument("--episode-max-steps", type=int, default=2000)
+    ap.add_argument("--no-ilp", action="store_true", help="skip short-horizon ILP baseline")
     ap.add_argument("--deeprm-path", default="models/deeprm/deeprm_plus.pt")
     ap.add_argument("--deepreap-path", default="models/deeprm/deepreap.pt")
     ap.add_argument("--reap-cpu-metrics", default="models/reap/reap_cpu_load_metrics.json")
@@ -347,6 +417,7 @@ def main() -> None:
         deeprm_path=args.deeprm_path,
         deepreap_path=args.deepreap_path,
         trace_source=args.trace_source,
+        include_ilp=not args.no_ilp,
     )
 
     # serialize raw + summary
@@ -362,9 +433,12 @@ def main() -> None:
     print(f"[bench] wrote {out / 'benchmark.json'}")
     print(f"[bench] wrote {out / 'benchmark_summary.json'}")
     for sched, sig in summary.get("significance", {}).items():
+        p = sig.get("p_value")
+        p_str = f"{p:.4g}" if p is not None else "n/a"
         print(
             f"[bench] {sched} vs {sig['vs']} on {sig['metric']}: "
-            f"p={sig['p_value']:.4g} ({sig['test']}, n={sig['n']})"
+            f"p={p_str} (wilcoxon/ttest, n={sig['n']}, "
+            f"sig@0.01={sig.get('significant_at_0.01')})"
         )
 
     # plots

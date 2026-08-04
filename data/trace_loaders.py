@@ -28,10 +28,18 @@ from .synthetic_generator import generate_job_trace
 CANONICAL_COLS = ["job_id", "arrival_time", "duration", "res_0", "res_1"]
 
 
+def _series(df: pd.DataFrame, col: str) -> pd.Series:
+    """Return a 1-d Series even if duplicate column labels exist."""
+    obj = df[col]
+    if isinstance(obj, pd.DataFrame):
+        return obj.iloc[:, 0]
+    return obj
+
+
 def _ensure_canonical(df: pd.DataFrame, n_resources: int = 2) -> pd.DataFrame:
     """Normalize column names / dtypes into the scheduler schema."""
     out = df.copy()
-    # common aliases
+    # common aliases — only rename if the target is not already present
     rename = {
         "job": "job_id",
         "JobId": "job_id",
@@ -50,7 +58,14 @@ def _ensure_canonical(df: pd.DataFrame, n_resources: int = 2) -> pd.DataFrame:
         "cpu_avg": "res_0",
         "mem_avg": "res_1",
     }
-    out = out.rename(columns={k: v for k, v in rename.items() if k in out.columns})
+    for src, dst in rename.items():
+        if src in out.columns and dst not in out.columns:
+            out = out.rename(columns={src: dst})
+        elif src in out.columns and dst in out.columns and src != dst:
+            out = out.drop(columns=[src])
+
+    # collapse any accidental duplicate labels
+    out = out.loc[:, ~out.columns.duplicated()]
 
     if "job_id" not in out.columns:
         out["job_id"] = np.arange(len(out))
@@ -60,10 +75,15 @@ def _ensure_canonical(df: pd.DataFrame, n_resources: int = 2) -> pd.DataFrame:
         out["duration"] = 1
 
     # coerce numeric
-    out["job_id"] = out["job_id"].astype(int)
-    out["arrival_time"] = pd.to_numeric(out["arrival_time"], errors="coerce").fillna(0).astype(int)
+    out["job_id"] = _series(out, "job_id").astype(int)
+    out["arrival_time"] = (
+        pd.to_numeric(_series(out, "arrival_time"), errors="coerce").fillna(0).astype(int)
+    )
     out["duration"] = (
-        pd.to_numeric(out["duration"], errors="coerce").fillna(1).clip(lower=1).astype(int)
+        pd.to_numeric(_series(out, "duration"), errors="coerce")
+        .fillna(1)
+        .clip(lower=1)
+        .astype(int)
     )
 
     for r in range(n_resources):

@@ -26,7 +26,7 @@ import joblib
 import numpy as np
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 
 from .feature_selection import GAConfig, select_features
@@ -42,6 +42,10 @@ class EnsembleConfig:
     top_k: int = 3                 # used when scheme == "topk"
     online_lr: float = 0.2         # EMA blend factor for online re-weighting
     online_window: int = 64        # rolling window of feedback residuals
+    # Rolling-window time-series CV (eliminates temporal leakage from shuffle split)
+    use_timeseries_cv: bool = True
+    n_splits: int = 5
+    test_size: float = 0.2         # final holdout fraction (always the *last* rows)
 
 
 def compute_weights(
@@ -201,6 +205,18 @@ class REAPModel:
         return REAPModel(**d)
 
 
+def _temporal_holdout(
+    X: np.ndarray,
+    y: np.ndarray,
+    test_size: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Always hold out the *last* test_size fraction (no shuffle → no leakage)."""
+    n = len(y)
+    n_te = max(1, int(round(n * test_size)))
+    n_tr = max(1, n - n_te)
+    return X[:n_tr], X[n_tr:], y[:n_tr], y[n_tr:]
+
+
 def train_reap(
     X: np.ndarray,
     y: np.ndarray,
@@ -213,18 +229,21 @@ def train_reap(
     ensemble_cfg: EnsembleConfig | None = None,
 ) -> REAPModel:
     """
-    1. GA feature selection on TRAIN split
-    2. Standardize selected features
-    3. Train each base model
-    4. Combine via Softmax / Top-K / Stacking (configurable)
+    1. Temporal holdout (last test_size rows) — no random shuffle
+    2. GA feature selection on TRAIN split only
+    3. Rolling-window TimeSeriesSplit CV to score base models
+    4. Refit on full train; combine via Softmax / Top-K / Stacking
     """
     ens_cfg = ensemble_cfg or EnsembleConfig()
-    X_tr, X_te, y_tr, y_te = train_test_split(
-        X, y, test_size=test_size, random_state=seed
-    )
+    test_size = ens_cfg.test_size if ens_cfg.test_size else test_size
+    X_tr, X_te, y_tr, y_te = _temporal_holdout(X, y, test_size)
 
     if verbose:
-        print(f"[REAP] target={target_name}  train={len(y_tr)} test={len(y_te)}")
+        split_tag = "TimeSeriesSplit" if ens_cfg.use_timeseries_cv else "temporal-holdout"
+        print(
+            f"[REAP] target={target_name}  train={len(y_tr)} test={len(y_te)}  "
+            f"split={split_tag}"
+        )
         print(f"[REAP] running GA feature selection over {X.shape[1]} features...")
 
     mask, selected, fit = select_features(
@@ -248,32 +267,57 @@ def train_reap(
     val_mses = []
     base_preds_te = []
     base_preds_tr = []
-    for m in models:
+
+    # Rolling-window CV MSEs for weighting (prevents optimistic leakage)
+    cv_mses = np.zeros(len(models), dtype=float)
+    if ens_cfg.use_timeseries_cv and len(y_tr) >= ens_cfg.n_splits + 2:
+        tscv = TimeSeriesSplit(n_splits=ens_cfg.n_splits)
+        fold_mses = [[] for _ in models]
+        for tr_idx, va_idx in tscv.split(Xs_tr_s):
+            X_a, X_b = Xs_tr_s[tr_idx], Xs_tr_s[va_idx]
+            y_a, y_b = y_tr[tr_idx], y_tr[va_idx]
+            for i, proto in enumerate(build_default_models(seed=seed)):
+                proto.fit(X_a, y_a)
+                pred = proto.predict(X_b)
+                fold_mses[i].append(float(mean_squared_error(y_b, pred)))
+        cv_mses = np.array(
+            [float(np.mean(m)) if m else 1e6 for m in fold_mses], dtype=float
+        )
+        if verbose:
+            print(f"[REAP]   TimeSeriesSplit({ens_cfg.n_splits}) CV MSEs={cv_mses.round(3)}")
+
+    for i, m in enumerate(models):
         m.fit(Xs_tr_s, y_tr)
         pred_te = m.predict(Xs_te_s)
         pred_tr = m.predict(Xs_tr_s)
         mse = float(mean_squared_error(y_te, pred_te))
         mae = float(mean_absolute_error(y_te, pred_te))
-        metrics[m.name] = {"mse": mse, "mae": mae}
-        val_mses.append(mse)
+        metrics[m.name] = {
+            "mse": mse,
+            "mae": mae,
+            "cv_mse": float(cv_mses[i]) if len(cv_mses) else mse,
+        }
+        # Prefer CV MSE for weighting when available
+        val_mses.append(float(cv_mses[i]) if ens_cfg.use_timeseries_cv else mse)
         base_preds_te.append(pred_te)
         base_preds_tr.append(pred_tr)
         if verbose:
-            print(f"[REAP]   {m.name:18s}  mse={mse:7.4f}  mae={mae:7.4f}")
+            print(
+                f"[REAP]   {m.name:18s}  holdout_mse={mse:7.4f}  "
+                f"cv_mse={metrics[m.name]['cv_mse']:7.4f}  mae={mae:7.4f}"
+            )
 
     val_mses_arr = np.asarray(val_mses, dtype=float)
     meta_learner = None
     preds_te = np.stack(base_preds_te)  # (n_models, n_test)
 
     if ens_cfg.scheme == "stacking":
-        # Hold out a meta-train slice from the training predictions to avoid leakage
         P_tr = np.stack(base_preds_tr).T  # (n_train, n_models)
         P_te = preds_te.T
         meta = Ridge(alpha=1.0)
         meta.fit(P_tr, y_tr)
         ens = np.asarray(meta.predict(P_te))
         meta_learner = meta
-        # expose absolute ridge coefs as descriptive "weights"
         coef = np.abs(np.asarray(meta.coef_, dtype=float))
         weights = coef / (coef.sum() + 1e-12)
         if verbose:
@@ -295,11 +339,13 @@ def train_reap(
         "scheme": ens_cfg.scheme,
         "temperature": ens_cfg.temperature,
         "top_k": ens_cfg.top_k,
+        "timeseries_cv": ens_cfg.use_timeseries_cv,
+        "n_splits": ens_cfg.n_splits,
     }
     if verbose:
         print(f"[REAP]   ENSEMBLE({ens_cfg.scheme}) mse={ens_mse:7.4f}  mae={ens_mae:7.4f}")
         print(f"[REAP]   weights={dict(zip([m.name for m in models], weights.round(3)))}")
-        best_single = float(np.min(val_mses_arr))
+        best_single = float(np.min([metrics[m.name]["mse"] for m in models]))
         if ens_mse > best_single:
             print(
                 f"[REAP]   note: ensemble MSE {ens_mse:.4f} > best base {best_single:.4f}; "

@@ -109,9 +109,18 @@ results/plots/*.png
 | Area | Change |
 |------|--------|
 | PPO collapse | 10–100× training budget, cosine LR decay, clip=0.05, entropy anneal, KL early-stop |
-| Reward mismatch | Multi-objective: slowdown + throughput bonus − backlog/wait penalties; eval horizon 2k–8k steps |
-| Ensemble weights | Softmax(−MSE/τ), Top-K, Stacking meta-learner; online re-weight via `/feedback` |
-| Experimental rigor | n≥10 seeds, 95% CIs, Wilcoxon tests; Google/Alibaba/Azure loaders |
+| Reward mismatch | Multi-objective: slowdown + throughput − backlog/wait/fragmentation; eval horizon 2k–8k steps |
+| Ensemble weights | Softmax(−MSE/τ), Top-K, Stacking; TimeSeriesSplit (no shuffle leakage); online `/feedback` re-weight |
+| Experimental rigor | n≥5 seeds, mean±std + 95% CI, Wilcoxon + paired t-test; DRF + short-horizon ILP baselines |
+| Publishability suite | Oracle vs REAP vs no-forecast; forecast-noise sweep; zero-shot Google/Alibaba-like; latency microbench |
+| Tail / systems metrics | P95/P99 slowdown & wait, fragmentation, SLA breach rate, CNN decision latency |
+
+```bash
+# production-style traces + ablations
+python -m data.production_traces
+python -m src.evaluation.ablation --n-seeds 5
+# → results/ablation/{oracle_gap,noise_sensitivity,zero_shot_transfer,latency}.json
+```
 
 ## Tests
 
