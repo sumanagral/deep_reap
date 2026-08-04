@@ -35,6 +35,11 @@ Thumbs.db
 *.zip
 chat_session.md
 
+# --- Large raw cluster dumps (re-fetch via data.fetch_public_traces --keep-raw) ---
+data/dumps/**
+!data/dumps/.gitkeep
+# Converted evaluation subsets under data/real/ ARE tracked.
+
 # --- LaTeX build products ---
 *.aux
 *.bbl

@@ -1,0 +1,2 @@
+# Raw multi-GB dumps are fetched here by: python -m data.fetch_public_traces --keep-raw
+# They are gitignored; only converted subsets in ../real/ are committed.

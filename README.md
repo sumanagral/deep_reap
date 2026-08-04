@@ -120,6 +120,13 @@ results/plots/*.png
 python -m data.production_traces
 python -m src.evaluation.ablation --n-seeds 5
 # → results/ablation/{oracle_gap,noise_sensitivity,zero_shot_transfer,latency}.json
+
+# REAL public dumps (Google 2011 / 2019, Alibaba 2018, Azure 2019) → data/real/
+python -m data.fetch_public_traces --max-jobs 5000
+python -m src.evaluation.benchmark \
+  --job-trace data/real/alibaba2018_jobs.csv --trace-source canonical --n-seeds 5
+python -m src.evaluation.benchmark \
+  --job-trace data/real/google2011_jobs.csv --trace-source canonical --n-seeds 5
 ```
 
 ## Tests

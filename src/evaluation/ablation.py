@@ -204,13 +204,21 @@ def zero_shot_transfer(
     max_steps: int = 2000,
     episode_max_steps: int = 1500,
 ) -> dict:
-    """Evaluate policies (trained on synthetic) zero-shot on Google/Alibaba-like traces."""
+    """Evaluate policies (trained on synthetic) zero-shot on real / stylized traces."""
     from src.deeprm.baselines import run_baseline
 
     traces = {
         "google_like": generate_google_like_trace(n_jobs=1500, horizon=1200, seed=11),
         "alibaba_like": generate_alibaba_like_trace(n_jobs=1500, horizon=1200, seed=22),
     }
+    # Prefer converted official subsets when present
+    for label, path in (
+        ("google2011_real", Path("data/real/google2011_jobs.csv")),
+        ("alibaba2018_real", Path("data/real/alibaba2018_jobs.csv")),
+        ("azure2019_real", Path("data/real/azure2019_jobs.csv")),
+    ):
+        if path.exists():
+            traces[label] = pd.read_csv(path).head(2000)
     plus_pol, _ = _load_policy(deeprm_path)
     reap_pol, reap_ckpt = _load_policy(deepreap_path)
     results: dict = {}

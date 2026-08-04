@@ -310,11 +310,12 @@ shuffle splits are disabled to prevent temporal leakage.
   trace; a different offline scheduler would yield a different oracle.
 
 **External validity**
-- Vendored Google/Alibaba artifacts are *distribution-matched
-  stylized traces* (`data/production_traces.py`) plus loaders for real
-  dumps. Reviewers should be shown at least one run on an official
-  public sample (Borg 2019 / Alibaba 2018) downloaded at evaluation
-  time — full multi-GB dumps are not shipped in-repo.
+- Converted **5 000-job subsets** from official public releases ship in
+  `data/real/` (Google Borg 2011 task_events shard, Google 2019
+  collection_events, Alibaba 2018 `batch_task`, Azure Public Dataset
+  V2 `vmtable`). Re-download / enlarge with
+  `python -m data.fetch_public_traces --max-jobs N --keep-raw`.
+  Full multi-GB archives are not vendored (GitHub size limits).
 - Zero-shot transfer tests generalization across arrival/duration
   distributions, but not across cluster *sizes* or heterogeneous
   machine pools.

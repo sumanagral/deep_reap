@@ -1,0 +1,46 @@
+{
+  "max_jobs": 5000,
+  "sources": {
+    "google2011": {
+      "path": "data/real/google2011_jobs.csv",
+      "n_jobs": 5000,
+      "raw_shard": "data/real/google2011_task_events_part0.csv.gz"
+    },
+    "google2019": {
+      "path": "data/real/google2019_jobs.csv",
+      "n_jobs": 5000
+    },
+    "alibaba": {
+      "path": "data/real/alibaba2018_jobs.csv",
+      "n_jobs": 5000
+    },
+    "azure": {
+      "path": "data/real/azure2019_jobs.csv",
+      "n_jobs": 5000
+    }
+  },
+  "provenance": {
+    "google2011": {
+      "url": "https://storage.googleapis.com/clusterdata-2011-2/task_events/part-00000-of-00500.csv.gz",
+      "license": "CC-BY 4.0",
+      "citation": "Reiss et al., Google Cluster-Usage Traces v2.1"
+    },
+    "google2019": {
+      "url": "https://storage.googleapis.com/clusterdata_2019_a/collection_events-000000000000.json.gz",
+      "license": "Google cluster data terms",
+      "citation": "Tirmazi et al., Borg: the Next Generation (EuroSys'20) / clusterdata-2019"
+    },
+    "alibaba": {
+      "url": "http://clusterdata2018pubus.oss-us-west-1.aliyuncs.com/batch_task.tar.gz",
+      "alt_url": "http://clusterdata2018pubcn.oss-cn-beijing.aliyuncs.com/batch_task.tar.gz",
+      "license": "Alibaba clusterdata research release",
+      "citation": "Guo et al., Alibaba Cluster Trace v2018 (IWQoS'19)"
+    },
+    "azure": {
+      "url": "https://github.com/Azure/AzurePublicDataset/releases/download/dataset-v2/trace_data_vmtable_vmtable.csv.gz",
+      "license": "Azure Public Dataset research release",
+      "citation": "Cortez et al., Resource Central (SOSP'17) / AzurePublicDatasetV2"
+    }
+  },
+  "note": "Subsets converted into DeepREAP canonical schema. Re-fetch/convert with: python -m data.fetch_public_traces --max-jobs 5000"
+}

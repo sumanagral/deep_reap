@@ -287,6 +287,28 @@ def test_production_traces_and_latency():
     assert lat["total"]["mean_ms"] >= 0.0
 
 
+def test_real_trace_subsets_loadable():
+    from pathlib import Path
+    real = Path("data/real")
+    for name in ("google2011_jobs.csv", "alibaba2018_jobs.csv",
+                 "azure2019_jobs.csv", "google2019_jobs.csv"):
+        p = real / name
+        if not p.exists():
+            continue
+        df = pd.read_csv(p)
+        assert {"job_id", "arrival_time", "duration", "res_0", "res_1"} <= set(df.columns)
+        assert len(df) >= 100
+        assert df["duration"].between(1, 15).all()
+        assert df["res_0"].between(1, 10).all()
+        env = ClusterEnv(
+            cfg=ClusterConfig(time_horizon=10, n_visible=3, episode_max_steps=40),
+            job_trace=df.head(200),
+            seed=0,
+        )
+        m = run_baseline(env, "sjf", max_steps=80)
+        assert m["steps"] > 0
+
+
 def test_reap_timeseries_split_no_shuffle():
     df = generate_resource_usage(n_hours=24 * 5)
     feats = ["hour_of_day", "day_of_week", "active_users", "previous_hour_cpu"]

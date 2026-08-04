@@ -14,3 +14,5 @@ __all__ = [
     "generate_alibaba_like_trace",
     "load_job_trace",
 ]
+
+# Public dumps → data/real/*.csv via: python -m data.fetch_public_traces
