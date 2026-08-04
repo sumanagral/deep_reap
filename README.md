@@ -70,7 +70,7 @@ docker compose up -d
 
 ```bash
 # generate synthetic workload
-python -m data.synthetic_generator --hours 1440 --jobs 3000 --horizon 1500
+python -m data.synthetic_generator --hours 1440 --jobs 1500 --horizon 1500
 
 # train REAP (softmax ensemble; use --ensemble-scheme stacking|topk for alternatives)
 python -m src.reap.train --target cpu_load --ensemble-scheme softmax --temperature 2.0

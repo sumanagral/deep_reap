@@ -50,3 +50,7 @@ data/dumps/**
 *.out
 *.synctex.gz
 *.toc
+
+# Extra REAP training variants (regenerable)
+models/reap_paper/
+models/reap_softmax/

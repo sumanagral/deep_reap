@@ -1,0 +1,58 @@
+{
+  "fifo": {
+    "avg_slowdown": 20.201267,
+    "avg_completion": 48.648148,
+    "n_done": 54,
+    "n_remaining": 68,
+    "total_reward": -374.584863,
+    "steps": 201
+  },
+  "sjf": {
+    "avg_slowdown": 20.109678,
+    "avg_completion": 49.509434,
+    "n_done": 53,
+    "n_remaining": 68,
+    "total_reward": -366.324657,
+    "steps": 201
+  },
+  "packer": {
+    "avg_slowdown": 18.75873,
+    "avg_completion": 48.423077,
+    "n_done": 52,
+    "n_remaining": 69,
+    "total_reward": -375.271903,
+    "steps": 201
+  },
+  "deeprm_plus_imitation": {
+    "avg_slowdown": 19.299656,
+    "avg_completion": 43.414634,
+    "n_done": 41,
+    "n_remaining": 65,
+    "total_reward": -414.064471,
+    "steps": 201
+  },
+  "deeprm_plus": {
+    "avg_slowdown": 24.472818,
+    "avg_completion": 55.439024,
+    "n_done": 41,
+    "n_remaining": 65,
+    "total_reward": -443.720553,
+    "steps": 201
+  },
+  "deepreap_imitation": {
+    "avg_slowdown": 8.265072,
+    "avg_completion": 19.04,
+    "n_done": 25,
+    "n_remaining": 65,
+    "total_reward": -446.370621,
+    "steps": 201
+  },
+  "deepreap": {
+    "avg_slowdown": 18.116314,
+    "avg_completion": 42.046512,
+    "n_done": 43,
+    "n_remaining": 65,
+    "total_reward": -401.786788,
+    "steps": 201
+  }
+}

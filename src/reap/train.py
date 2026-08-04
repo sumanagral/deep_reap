@@ -35,8 +35,16 @@ CANDIDATE_FEATURES: list[str] = [
 
 def load_dataset(csv_path: str | Path, target: str) -> tuple[np.ndarray, np.ndarray, list[str]]:
     df = pd.read_csv(csv_path)
+    # Drop accidental unnamed / duplicate-header columns from messy dumps.
+    df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
     # if memory_usage is the target, exclude it from features and vice versa.
     feats = [c for c in CANDIDATE_FEATURES if c != target and c in df.columns]
+    if target not in df.columns:
+        raise ValueError(f"target column {target!r} missing from {csv_path}")
+    # Coerce to numeric and drop rows corrupted by duplicated CSV headers.
+    for c in feats + [target]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(subset=feats + [target]).reset_index(drop=True)
     X = df[feats].to_numpy(dtype=float)
     y = df[target].to_numpy(dtype=float)
     return X, y, feats

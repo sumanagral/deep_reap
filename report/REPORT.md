@@ -76,24 +76,30 @@ Pipeline:
    `REAPModel.update_online_weights` (and the `/feedback` API) EMA-blends
    fresh Softmax weights as cluster observations arrive.
 
-### Empirical results (cpu_load target, 60-day trace)
+### Empirical results (softmax τ=2, temporal 20% holdout, 60-day trace)
 
-| Model            | MSE   | MAE  | Ensemble weight |
+| Model (cpu_load) | MSE   | MAE  | Ensemble weight |
 |------------------|------:|-----:|----------------:|
-| LinearRegression | 9.33  | 2.45 | 0.205 |
-| BayesianRidge    | 9.34  | 2.45 | 0.205 |
-| DecisionTree     | 14.48 | 2.99 | 0.132 |
-| RandomForest     | 8.41  | 2.32 | 0.227 |
-| SVR              | 8.26  | 2.30 | 0.231 |
-| **ENSEMBLE**     | **8.07** | **2.28** | — |
+| LinearRegression | 9.01  | 2.39 | 0.193 |
+| BayesianRidge    | 9.01  | 2.39 | 0.193 |
+| DecisionTree     | 12.16 | 2.75 | 0.015 |
+| RandomForest     | 7.93  | 2.24 | 0.265 |
+| **SVR**          | **6.92** | **2.11** | 0.335 |
+| Ensemble         | 7.26  | 2.15 | — |
 
-The ensemble strictly dominates every base model on both MSE and MAE.
-GA selected 8 of 11 features, dropping `day_of_week`, `is_weekend`,
-and `svc_Database` (their information is already captured by
-`hour_of_day`, the AR term, and the other one-hots).
+| Model (memory_usage) | MSE   | MAE  | Ensemble weight |
+|----------------------|------:|-----:|----------------:|
+| LinearRegression     | 26.37 | 4.15 | 0.144 |
+| BayesianRidge        | 26.37 | 4.15 | 0.143 |
+| DecisionTree         | 34.98 | 4.71 | 0.001 |
+| RandomForest         | 24.66 | 4.03 | 0.252 |
+| SVR                  | 23.66 | 3.90 | 0.460 |
+| **ENSEMBLE**         | **23.40** | **3.90** | — |
 
-For the memory-usage target the same pattern holds (per-model values
-in `results/plots/reap_quality_memory_usage.png`).
+Under leakage-free temporal evaluation the softmax ensemble wins on
+memory and is second to SVR on CPU. Inverse-MSE weighting remains
+nearly flat and loses to SVR on both targets. GA selected 8/11 CPU
+features (dropping `day_of_week`, `is_weekend`, `svc_Database`).
 
 ## 5. DeepRM_Plus (`src/deeprm/`)
 
