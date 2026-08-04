@@ -50,11 +50,18 @@ URLS = {
         "https://storage.googleapis.com/clusterdata_2019_a/"
         "collection_events-000000000000.json.gz"
     ),
+    # CN endpoint is currently more reliable; US often 404s.
     "alibaba": (
+        "http://clusterdata2018pubcn.oss-cn-beijing.aliyuncs.com/batch_task.tar.gz"
+    ),
+    "alibaba_us": (
         "http://clusterdata2018pubus.oss-us-west-1.aliyuncs.com/batch_task.tar.gz"
     ),
-    "alibaba_cn": (
-        "http://clusterdata2018pubcn.oss-cn-beijing.aliyuncs.com/batch_task.tar.gz"
+    "alibaba_machine_meta": (
+        "http://clusterdata2018pubcn.oss-cn-beijing.aliyuncs.com/machine_meta.tar.gz"
+    ),
+    "alibaba_container_meta": (
+        "http://clusterdata2018pubcn.oss-cn-beijing.aliyuncs.com/container_meta.tar.gz"
     ),
     "azure": (
         "https://github.com/Azure/AzurePublicDataset/releases/download/"
@@ -331,7 +338,7 @@ def main() -> None:
         csv_path = DUMPS / "alibaba_batch_task.csv"
         if not args.skip_download and not csv_path.exists():
             try:
-                _download(URLS["alibaba"], tar_path, alt_urls=[URLS["alibaba_cn"]])
+                _download(URLS["alibaba"], tar_path, alt_urls=[URLS["alibaba_us"]])
             except RuntimeError:
                 pass
         if tar_path.exists() and not csv_path.exists():

@@ -309,6 +309,25 @@ def test_real_trace_subsets_loadable():
         assert m["steps"] > 0
 
 
+def test_real_raw_dump_samples_present():
+    from pathlib import Path
+    raw = Path("data/real/raw")
+    if not raw.exists():
+        return
+    expected = [
+        "alibaba2018_batch_task_sample.csv",
+        "alibaba2018_machine_meta.csv",
+        "azure2019_vmtable_sample.csv",
+        "google2011_task_events_sample.csv",
+    ]
+    for name in expected:
+        p = raw / name
+        assert p.exists(), f"missing raw dump sample {p}"
+        assert p.stat().st_size > 1000
+    shards = list((raw / "google2011").glob("*.csv.gz")) if (raw / "google2011").exists() else []
+    assert len(shards) >= 1
+
+
 def test_reap_timeseries_split_no_shuffle():
     df = generate_resource_usage(n_hours=24 * 5)
     feats = ["hour_of_day", "day_of_week", "active_users", "previous_hour_cpu"]

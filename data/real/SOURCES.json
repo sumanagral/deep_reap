@@ -1,27 +1,39 @@
 {
-  "max_jobs": 5000,
+  "max_jobs": 20000,
   "sources": {
     "google2011": {
       "path": "data/real/google2011_jobs.csv",
-      "n_jobs": 5000,
-      "raw_shard": "data/real/google2011_task_events_part0.csv.gz"
+      "n_jobs": 20000,
+      "raw_shards": "data/real/raw/google2011/"
     },
     "google2019": {
       "path": "data/real/google2019_jobs.csv",
-      "n_jobs": 5000
+      "n_jobs": 20000
     },
     "alibaba": {
       "path": "data/real/alibaba2018_jobs.csv",
-      "n_jobs": 5000
+      "n_jobs": 20000,
+      "raw_sample": "data/real/raw/alibaba2018_batch_task_sample.csv"
     },
     "azure": {
       "path": "data/real/azure2019_jobs.csv",
-      "n_jobs": 5000
+      "n_jobs": 20000,
+      "raw_sample": "data/real/raw/azure2019_vmtable_sample.csv"
     }
+  },
+  "raw_samples": {
+    "google2011_task_events_shards": "data/real/raw/google2011/",
+    "google2011_task_events_sample": "data/real/raw/google2011_task_events_sample.csv",
+    "google2011_task_usage_sample": "data/real/raw/google2011_task_usage_sample.csv",
+    "alibaba2018_batch_task_sample": "data/real/raw/alibaba2018_batch_task_sample.csv",
+    "alibaba2018_machine_meta": "data/real/raw/alibaba2018_machine_meta.csv",
+    "alibaba2018_container_meta_sample": "data/real/raw/alibaba2018_container_meta_sample.csv",
+    "azure2019_vmtable_sample": "data/real/raw/azure2019_vmtable_sample.csv",
+    "cloudsimplus_samples": "data/real/raw/cloudsimplus_google_*_sample.csv"
   },
   "provenance": {
     "google2011": {
-      "url": "https://storage.googleapis.com/clusterdata-2011-2/task_events/part-00000-of-00500.csv.gz",
+      "url": "https://storage.googleapis.com/clusterdata-2011-2/task_events/part-*-of-00500.csv.gz",
       "license": "CC-BY 4.0",
       "citation": "Reiss et al., Google Cluster-Usage Traces v2.1"
     },
@@ -31,8 +43,9 @@
       "citation": "Tirmazi et al., Borg: the Next Generation (EuroSys'20) / clusterdata-2019"
     },
     "alibaba": {
-      "url": "http://clusterdata2018pubus.oss-us-west-1.aliyuncs.com/batch_task.tar.gz",
-      "alt_url": "http://clusterdata2018pubcn.oss-cn-beijing.aliyuncs.com/batch_task.tar.gz",
+      "url": "http://clusterdata2018pubcn.oss-cn-beijing.aliyuncs.com/batch_task.tar.gz",
+      "machine_meta": "http://clusterdata2018pubcn.oss-cn-beijing.aliyuncs.com/machine_meta.tar.gz",
+      "container_meta": "http://clusterdata2018pubcn.oss-cn-beijing.aliyuncs.com/container_meta.tar.gz",
       "license": "Alibaba clusterdata research release",
       "citation": "Guo et al., Alibaba Cluster Trace v2018 (IWQoS'19)"
     },
@@ -42,5 +55,5 @@
       "citation": "Cortez et al., Resource Central (SOSP'17) / AzurePublicDatasetV2"
     }
   },
-  "note": "Subsets converted into DeepREAP canonical schema. Re-fetch/convert with: python -m data.fetch_public_traces --max-jobs 5000"
+  "note": "Full multi-GB archives are not vendored. Re-fetch with: python -m data.fetch_public_traces --max-jobs 20000 --keep-raw"
 }
