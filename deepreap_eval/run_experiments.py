@@ -371,6 +371,10 @@ def phase_c(
     sigmas = [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
     sweep = []
 
+    cfg = ClusterConfig(reap_channels=2, episode_max_steps=args.episode_max_steps)
+    print("[C] precomputing REAP diurnal forecast cache …", flush=True)
+    reap_fn = deeprm_plus._reap_predict_fn(cpu_model, mem_model, cfg)
+
     # Vanilla reference (no forecast, noise irrelevant)
     van_tats = []
     for seed in seeds:
@@ -392,8 +396,6 @@ def phase_c(
                 _window_trace(full, seed=seed, n_jobs=args.eval_jobs),
                 load="medium", seed=seed,
             )
-            cfg = ClusterConfig(reap_channels=2, episode_max_steps=args.episode_max_steps)
-            reap_fn = deeprm_plus._reap_predict_fn(cpu_model, mem_model, cfg)
             m = deeprm_plus.run_policy_metrics(
                 ckpt, trace, channels=2, mode="reap", seed=seed,
                 max_steps=args.max_steps, episode_max_steps=args.episode_max_steps,
@@ -431,18 +433,29 @@ def phase_c(
             flush=True,
         )
 
+    # Graceful = no catastrophic blow-up vs clean DeepREAP (≤35% worse TAT).
     graceful = all(
         e["avg_turnaround"]["mean"] <= sweep[0]["avg_turnaround"]["mean"] * 1.35
         for e in sweep
     )
-    still_better_at_30 = bool(sweep[-1]["beats_vanilla_mean"])
+    # Robustness claim requires a *real* clean win first (σ=0, p<0.05),
+    # then non-significant regression / still-better mean at σ=30%.
+    clean_p = sweep[0].get("wilcoxon_p_vs_vanilla")
+    p30 = sweep[-1].get("wilcoxon_p_vs_vanilla")
+    clean_win = clean_p is not None and clean_p < 0.05
+    still_ok_at_30 = bool(sweep[-1]["beats_vanilla_mean"]) or (
+        p30 is not None and p30 > 0.05  # not significantly worse
+        and sweep[-1]["avg_turnaround"]["mean"]
+        <= vanilla_ref["mean"] * 1.05
+    )
     report = {
         "phase": "C",
         "vanilla_turnaround_ref": vanilla_ref,
         "sweep": sweep,
         "graceful_degradation": graceful,
-        "beats_vanilla_at_30pct_noise": still_better_at_30,
-        "robustness_claim_supported": graceful and still_better_at_30,
+        "clean_deepreap_beats_vanilla_p05": clean_win,
+        "beats_vanilla_at_30pct_noise": bool(sweep[-1]["beats_vanilla_mean"]),
+        "robustness_claim_supported": bool(graceful and clean_win and still_ok_at_30),
     }
     (out / "phase_c.json").write_text(json.dumps(report, indent=2))
     print("[C] robustness claim supported:", report["robustness_claim_supported"], flush=True)
@@ -510,6 +523,8 @@ def write_claim_tables(out: Path, a: dict, b: dict, c: dict) -> Path:
         )
     lines += [
         "",
+        f"- Clean DeepREAP beats Vanilla (σ=0, p<0.05): "
+        f"**{c.get('clean_deepreap_beats_vanilla_p05', False)}**",
         f"- Robustness claim supported: **{c['robustness_claim_supported']}**",
         "",
     ]
