@@ -88,8 +88,10 @@ def inject_forecast_noise(
 ) -> np.ndarray:
     """
     Corrupt a forecast tensor by ±noise_pct (e.g. 0.1 = ±10%).
+
     mode='multiplicative' → forecast * (1 + U(-p, p))
     mode='additive'       → forecast + U(-p, p)  (clipped to [0, 1])
+    mode='gaussian'       → forecast + N(0, p²)   (CMPE-294 Phase C)
     """
     rng = rng or np.random.default_rng(0)
     p = float(abs(noise_pct))
@@ -98,6 +100,8 @@ def inject_forecast_noise(
         return out
     if mode == "additive":
         out = out + rng.uniform(-p, p, size=out.shape).astype(np.float32)
+    elif mode == "gaussian":
+        out = out + rng.normal(0.0, p, size=out.shape).astype(np.float32)
     else:
         out = out * (1.0 + rng.uniform(-p, p, size=out.shape).astype(np.float32))
     return np.clip(out, 0.0, 1.0)
@@ -125,6 +129,7 @@ def attach_forecast_callback(
     noise_pct: float = 0.0,
     seed: int = 0,
     reap_predict_fn=None,
+    noise_mode: str = "multiplicative",
 ):
     """
     Monkey-patch env._advance_one_step to refresh the REAP/oracle channels
@@ -141,28 +146,26 @@ def attach_forecast_callback(
 
     orig_advance = env._advance_one_step
 
+    def _make_forecast(t: int) -> np.ndarray:
+        if mode == "zero":
+            return np.zeros((channels, cfg.n_resources, cfg.time_horizon), dtype=np.float32)
+        if mode == "oracle":
+            return oracle_forecast_at(util_timeline, t, cfg, channels=channels)
+        if mode == "reap" and reap_predict_fn is not None:
+            return np.asarray(reap_predict_fn(t), dtype=np.float32)
+        return diurnal_proxy_forecast(t, cfg, channels=channels)
+
     def _advance():
         orig_advance()
-        if mode == "zero":
-            fc = np.zeros((channels, cfg.n_resources, cfg.time_horizon), dtype=np.float32)
-        elif mode == "oracle":
-            fc = oracle_forecast_at(util_timeline, env.t, cfg, channels=channels)
-        elif mode == "reap" and reap_predict_fn is not None:
-            fc = reap_predict_fn(env.t)
-        else:
-            fc = diurnal_proxy_forecast(env.t, cfg, channels=channels)
+        fc = _make_forecast(env.t)
         if noise_pct > 0:
-            fc = inject_forecast_noise(fc, noise_pct, rng=rng)
+            fc = inject_forecast_noise(fc, noise_pct, rng=rng, mode=noise_mode)
         env.set_reap_forecast(fc)
 
     env._advance_one_step = _advance  # type: ignore[method-assign]
     # seed initial forecast
-    if mode == "oracle":
-        env.set_reap_forecast(oracle_forecast_at(util_timeline, env.t, cfg, channels=channels))
-    elif mode == "zero":
-        env.set_reap_forecast(
-            np.zeros((channels, cfg.n_resources, cfg.time_horizon), dtype=np.float32)
-        )
-    else:
-        env.set_reap_forecast(diurnal_proxy_forecast(env.t, cfg, channels=channels))
+    fc0 = _make_forecast(env.t)
+    if noise_pct > 0:
+        fc0 = inject_forecast_noise(fc0, noise_pct, rng=rng, mode=noise_mode)
+    env.set_reap_forecast(fc0)
     return env
