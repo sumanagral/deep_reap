@@ -1,0 +1,21 @@
+{
+  "usage_csv": "data/real/resource_usage_google.csv",
+  "job_trace": "data/real/google2011_jobs.csv",
+  "out": "results/cmpe294_eval",
+  "model_root": "models/cmpe294_eval",
+  "n_episodes": 30,
+  "ppo_updates": 100,
+  "imitation_episodes": 30,
+  "max_train_jobs": 4000,
+  "eval_jobs": 2500,
+  "episode_max_steps": 1500,
+  "max_steps": 3000,
+  "ga_pop": 20,
+  "ga_gen": 15,
+  "seed": 42,
+  "device": "cpu",
+  "skip_train": false,
+  "skip_a": true,
+  "skip_b": false,
+  "skip_c": false
+}

@@ -109,6 +109,7 @@ class ClusterEnv:
         self._steps = 0
         self._n_finished_prev = 0
         self._frag_samples: list[float] = []
+        self._util_samples: list[float] = []
         self.reap_forecast = np.zeros(
             (c.reap_channels, c.n_resources, c.time_horizon), dtype=np.float32
         )
@@ -215,6 +216,11 @@ class ClusterEnv:
         # spawn new arrivals
         self._spawn_arrivals()
         self._frag_samples.append(self._fragmentation())
+        # instantaneous utilization = mean resource occupancy at the current slot
+        util_now = float(
+            np.mean(self.cluster_load[:, 0] / max(self.cfg.res_capacity, 1))
+        )
+        self._util_samples.append(util_now)
 
     def _fragmentation(self) -> float:
         """
@@ -365,6 +371,7 @@ class ClusterEnv:
             + sum(1 for s in self.visible if s is not None)
         )
         frag = float(np.mean(self._frag_samples)) if self._frag_samples else 0.0
+        util = float(np.mean(self._util_samples)) if self._util_samples else 0.0
         if not self.finished:
             return {
                 "avg_slowdown": 0.0,
@@ -377,6 +384,7 @@ class ClusterEnv:
                 "n_done": 0,
                 "throughput": 0.0,
                 "fragmentation": frag,
+                "avg_utilization": util,
                 "sla_breach_rate": 0.0,
                 "n_remaining": n_remaining,
             }
@@ -405,6 +413,7 @@ class ClusterEnv:
             "n_done": n_done,
             "throughput": float(n_done) / max(self.t, 1),
             "fragmentation": frag,
+            "avg_utilization": util,
             "sla_breach_rate": float(breaches) / max(n_done, 1),
             "n_remaining": n_remaining,
         }

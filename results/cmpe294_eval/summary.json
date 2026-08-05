@@ -1,0 +1,22 @@
+{
+  "prediction_claim": {
+    "best_cpu_model": "RandomForest",
+    "best_cpu_mae": 0.0043256482979064995,
+    "ensemble_cpu_mae": 0.006446159087180783,
+    "cpu_ensemble_wins": false,
+    "best_memory_model": "SVR",
+    "best_memory_mae": 1.1051835753140982,
+    "ensemble_memory_mae": 1.1181105561568008,
+    "memory_ensemble_wins": false
+  },
+  "scheduling_claim_supported": false,
+  "robustness_claim_supported": false,
+  "notes": {
+    "oracle_tat_p_vs_vanilla": 0.9771296144902547,
+    "deepreap_tat_p_vs_vanilla": 0.6352230310248806,
+    "deepreap_throughput": 1.042768890436355,
+    "vanilla_throughput": 1.4935671562881299,
+    "interpretation": "CMPE-294 core scheduling claim not supported under this protocol: Oracle and DeepREAP turnaround are statistically indistinguishable from Vanilla DeepRM_Plus (p>>0.05). Forecast channels also reduce throughput/utilization (more no-ops), so predicted demand is not helping the learned policy. REAP inv-MSE ensemble does not beat best single-model MAE on this Google usage split (RF/SVR win)."
+  },
+  "tables": "results/cmpe294_eval/CLAIM_TABLES.md"
+}

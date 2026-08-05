@@ -129,7 +129,8 @@ def _ci(values: list[float], alpha: float = 0.05) -> tuple[float, float, float]:
 METRIC_KEYS = [
     "avg_slowdown", "avg_completion", "p95_slowdown", "p99_slowdown",
     "avg_wait", "p95_wait", "p99_wait",
-    "n_done", "throughput", "fragmentation", "sla_breach_rate", "total_reward",
+    "n_done", "throughput", "fragmentation", "avg_utilization",
+    "sla_breach_rate", "total_reward",
     "cnn_latency_mean_ms", "cnn_latency_p95_ms",
 ]
 
