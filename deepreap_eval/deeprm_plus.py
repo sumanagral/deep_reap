@@ -31,26 +31,37 @@ from src.reap.ensemble import REAPModel
 
 
 def _reap_predict_fn(cpu_model: REAPModel, mem_model: REAPModel | None, cfg: ClusterConfig):
-    """Map env time → (C,R,T) forecast using fitted REAP models (diurnal roll)."""
+    """
+    Map env time → (C,R,T) forecast using fitted REAP models.
+
+    Precomputes one forecast tensor per hour-of-day (24 entries) so the
+    per-timestep RL callback is O(1). Without caching, rolling the ensemble
+    forward `time_horizon` steps on every clock tick is prohibitively slow
+    for imitation + PPO.
+    """
     import datetime as dt
     from src.integration.deepreap import ForecastInput, build_reap_forecast
 
-    # Scale observed targets roughly into REAP's training range.
-    def _fn(t: int) -> np.ndarray:
-        base = dt.datetime(2024, 1, 1) + dt.timedelta(hours=int(t) % (24 * 60))
+    cache: list[np.ndarray] = []
+    for hour in range(24):
         inp = ForecastInput(
-            timestamp=base,
+            timestamp=dt.datetime(2024, 1, 1, hour=hour),
             service_type="Web",
             active_users=200,
             previous_hour_cpu=30.0,
             previous_hour_memory=40.0,
             network_utilization=10.0,
         )
-        return build_reap_forecast(
-            cpu_model, mem_model, inp,
-            n_resources=cfg.n_resources,
-            time_horizon=cfg.time_horizon,
+        cache.append(
+            build_reap_forecast(
+                cpu_model, mem_model, inp,
+                n_resources=cfg.n_resources,
+                time_horizon=cfg.time_horizon,
+            )
         )
+
+    def _fn(t: int) -> np.ndarray:
+        return cache[int(t) % 24].copy()
 
     return _fn
 

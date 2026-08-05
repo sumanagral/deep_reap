@@ -207,6 +207,11 @@ def phase_b(
         "sjf": [], "vanilla": [], "deepreap": [], "oracle": [],
     }
 
+    # Build the hour-of-day REAP cache once (not once per episode).
+    cfg_reap = ClusterConfig(reap_channels=2, episode_max_steps=args.episode_max_steps)
+    print("[B] precomputing REAP diurnal forecast cache …", flush=True)
+    reap_fn = deeprm_plus._reap_predict_fn(cpu_model, mem_model, cfg_reap)
+
     for load in loads:
         print(f"[B] evaluating load={load} over {len(seeds)} episodes …", flush=True)
         load_runs: dict[str, list[dict]] = {k: [] for k in aggregate_runs}
@@ -215,7 +220,6 @@ def phase_b(
             trace = _scale_trace_load(base, load=load, seed=seed)
             cfg = ClusterConfig(reap_channels=2, episode_max_steps=args.episode_max_steps)
             util = build_offline_utilization(trace, cfg)
-            reap_fn = deeprm_plus._reap_predict_fn(cpu_model, mem_model, cfg)
 
             # SJF
             m = deeprm_plus.run_sjf(trace, seed=seed, max_steps=args.max_steps)
